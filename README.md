@@ -10,7 +10,7 @@ MacTun 是仅在本机运行的轻量 macOS TUN 工具，把选定应用的 IPv4
 - 应用包内的单文件 Go helper 以管理员身份创建 `utun` 并管理路由。
 - macOS `libproc` 把每条 TCP/UDP 连接映射到应用或父进程。
 - 选中应用走本地 SOCKS5；其他应用由绑定物理网卡的 socket 配合接口作用域路由直连，避免直连流量再次进入 TUN；暂时无法识别的连接保持直连，已确认属于 engine 或归属冲突的连接仍会阻断以防回环。
-- 按应用模式下，系统 DNS 默认保留原有路径：`127.0.0.1`/`::1` 等本地解析器继续走 loopback，外部解析器通过物理网卡直连，避免未选中应用的解析也受 SOCKS5 影响；代价是选中应用的 DNS 查询可能从直连出口泄漏。全局模式仍通过 SOCKS5 转发外部系统 DNS。
+- 按应用模式默认把进入 TUN 的 53 端口 DNS 发往经 SOCKS5 到达的 trusted DNS；`127.0.0.1`/`::1` 等本地系统解析器仍留在 loopback。命令行将 `--trusted-dns` 设为空时，外部系统解析器才保持物理直连。
 
 数据面使用 [tun2socks](https://github.com/xjasonlyu/tun2socks) / gVisor，不安装内核扩展，也不引入第二套 Go。
 
@@ -22,6 +22,104 @@ open macos/MacTun.xcodeproj
 
 需要 macOS 13+、完整 Xcode 16+ 和系统 Go 1.23.1+。免费 Personal Team 或本机 ad-hoc 签名均可。
 
+## 搭配 dnscrypt-proxy
+
+### 为什么需要 dnscrypt-proxy
+
+[dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy) 不是 MacTun 启动 TUN 的硬依赖，但在存在 DNS 污染、需要按应用代理或经常切换 Wi-Fi 的环境中，强烈建议搭配使用。它解决的是 TUN 和 SOCKS5 本身无法可靠补救的“代理前 DNS 解析”问题。
+
+macOS 上的大多数应用先把域名交给系统共享的 `mDNSResponder` 解析，之后才连接得到的目标 IP。MacTun 在网络层看到的通常是 `mDNSResponder` 发出的 DNS 查询，无法稳定还原最初发起查询的是 Chrome、Codex、ChatGPT 还是名单外应用；等 MacTun 接管应用数据流量时，域名也往往已经变成了 IP。因此，即使名单内应用的 TCP/UDP 后续正确进入 SOCKS5，只要当前 Wi-Fi 或运营商 DNS 先返回了污染、错误或不可达的 IP，代理仍会连接这个错误目标，不能倒推原域名并重新解析。
+
+```text
+没有本地加密 DNS：
+应用 -> mDNSResponder -> 当前 Wi-Fi / 运营商 DNS
+     -> 污染或不可达的 IP -> MacTun / SOCKS5 仍连接错误 IP -> ERR_TIMED_OUT
+
+搭配 dnscrypt-proxy：
+应用 -> mDNSResponder -> 127.0.0.1:53 dnscrypt-proxy
+     -> 本地 SOCKS5 -> 加密 DNS 上游 -> 正确 IP -> MacTun 按应用转发数据
+```
+
+这也解释了为什么同一个浏览器里飞书等网站可能能打开，而 Google 等网站超时：数据代理本身可能正常，失败发生在更早的系统 DNS 阶段。反过来，如果把共享的 `mDNSResponder` DNS 流量简单地全部归入按应用 TUN，它实际上会变成全系统策略；TUN、代理或网络切换出现问题时，名单外应用的解析也会一起受到影响。
+
+dnscrypt-proxy 提供一个不随 Wi-Fi 改变的本地解析入口 `127.0.0.1:53`，并可把加密 DNS 上游显式交给本地 SOCKS5。这样可以绕过当前 Wi-Fi 的明文 DNS、DNS 污染和 scoped resolver 变化，同时让 MacTun 只负责 DNS 之后的按应用数据分流。名单内和名单外应用会共享 dnscrypt-proxy 的解析结果，但名单外应用的数据连接仍然直连。
+
+如果当前系统 DNS 始终可信、稳定，或已经使用其他可靠的本地加密 DNS stub，则不必额外安装 dnscrypt-proxy。它是对 MacTun 的 DNS 补充，不是按应用 DNS 隔离工具，也不是唯一可用的本地解析器。
+
+### 推荐链路与配置
+
+MacTun 0.3.11 及以上会把 `127.0.0.1`/`::1` 视为有效的系统 DNS，但不会为它们创建指向物理网关或 TUN 的主机路由。因此可以让 dnscrypt-proxy 监听 loopback，再显式通过同一个本地 SOCKS5 访问加密上游：
+
+```text
+macOS / mDNSResponder -> 127.0.0.1:53 dnscrypt-proxy
+                      -> 127.0.0.1:7890 SOCKS5
+                      -> 加密 DNS 上游
+```
+
+下面是精简的代理模式配置，完整字段说明以 dnscrypt-proxy 的 [官方示例配置](https://github.com/DNSCrypt/dnscrypt-proxy/blob/master/dnscrypt-proxy/example-dnscrypt-proxy.toml) 为准：
+
+```toml
+listen_addresses = ['127.0.0.1:53']
+server_names = ['cloudflare']
+
+force_tcp = true
+http3 = false
+proxy = 'socks5://127.0.0.1:7890'
+```
+
+`cloudflare` 只是示例，请自行选择可信且可用的解析器；显式设置 `server_names` 时，dnscrypt-proxy 的 `require_*` 筛选条件不会参与选服。SOCKS5 端口必须与 MacTun 使用的本地代理一致。`proxy` 只承载 TCP，因此代理模式应同时启用 `force_tcp` 并关闭基于 UDP/QUIC 的 HTTP/3。若加密 DNS 上游可以稳定直连，应删除 `proxy` 并恢复 `force_tcp = false`，不要保留一个指向未运行代理的配置。
+
+推荐按以下顺序启用，避免把整台 Mac 切到尚未工作的本地 DNS：
+
+1. 启动本地 SOCKS5。
+2. 启动 dnscrypt-proxy，并先验证本地监听：
+
+   ```bash
+   dig @127.0.0.1 example.com
+   ```
+
+3. 保存当前网络服务的 DNS，再把活动服务指向 loopback；`Wi-Fi` 应替换为 `networksetup -listallnetworkservices` 显示的实际名称：
+
+   ```bash
+   networksetup -getdnsservers "Wi-Fi"
+   sudo networksetup -setdnsservers "Wi-Fi" 127.0.0.1
+   ```
+
+4. 检查系统解析和 loopback 路由：
+
+   ```bash
+   scutil --dns
+   route -n get 127.0.0.1
+   dscacheutil -q host -a name www.google.com
+   ```
+
+   `route` 的结果必须显示 `interface: lo0`。
+
+如果 `networksetup` 已设置为 `127.0.0.1`，但 `scutil --dns` 只显示不可达的 scoped resolver，或切换 Wi-Fi 后应用仍无法解析，可创建 `/etc/resolver/dnscrypt-proxy` 作为兼容补充：
+
+```text
+domain .
+nameserver 127.0.0.1
+search_order 1
+timeout 2
+```
+
+这会把 dnscrypt-proxy 设为全系统共享的根域解析器，并不只对 MacTun 名单内的应用生效。未选应用的数据流量仍然直连，但它们的系统 DNS 查询也会交给 dnscrypt-proxy。dnscrypt-proxy 或本地 SOCKS5 停止后，全机解析可能失败。
+
+其他注意事项：
+
+- 不要把提供本地 SOCKS5 的代理应用加入 MacTun 名单；dnscrypt-proxy 通常也无需加入。
+- `--trusted-dns` 表示 MacTun 经 SOCKS5 访问的外部 DNS，不能设置为 `127.0.0.1`。命令行若希望保留系统 dnscrypt-proxy 路径，可显式传入 `--trusted-dns ''`。
+- 浏览器内置的“安全 DNS”或 DoH 可能绕过系统解析器；如果希望所有普通域名都由 dnscrypt-proxy 处理，需要在浏览器中关闭该功能。
+- 停止或卸载 dnscrypt-proxy 前，应恢复之前保存的 DNS。若原来使用 DHCP 自动 DNS，可执行：
+
+  ```bash
+  sudo networksetup -setdnsservers "Wi-Fi" Empty
+  sudo rm -f /etc/resolver/dnscrypt-proxy
+  ```
+
+完整安装和服务管理步骤参见 dnscrypt-proxy 的 [macOS 官方说明](https://github.com/DNSCrypt/dnscrypt-proxy/wiki/Installation-macOS)。
+
 ## 命令行版本
 
 命令行工具既支持按应用模式，也保留全局 TUN 模式。
@@ -30,7 +128,7 @@ open macos/MacTun.xcodeproj
 
 - 单文件、无需配置文件，Apple Silicon 与 Intel Mac 都可编译。
 - 接管 IPv4 和 IPv6，支持 TCP、UDP；启用前发送真实 SOCKS5 TCP 和 UDP 数据探测。
-- 全局模式为外部系统 DNS 服务器添加精确 TUN 路由；按应用模式默认保留系统 DNS 的配置路径（本地解析器留在 loopback，外部解析器走物理网卡），避免影响未选应用。
+- 全局模式为外部系统 DNS 服务器添加精确 TUN 路由；按应用模式启用 trusted DNS 时将 53 端口 DNS 经 SOCKS5 转发，未启用时才保留系统 DNS 的配置路径（本地解析器留在 loopback，外部解析器走物理网卡）。
 - 不替换系统默认路由；退出时只删除自己添加的路由。
 - `Ctrl-C`、`mactun down`、启动时残留状态恢复三重清理机制。
 - 内置引擎通过匿名管道接收代理配置，子进程参数和状态文件不会重复保存代理密码。
@@ -117,6 +215,7 @@ sudo mactun up --proxy 'socks5://user:password@127.0.0.1:7890' --bypass node.exa
 --ipv6=false      不接管 IPv6（会失去完整的防漏能力）
 --auto-bypass     尽力识别本地代理当前远端连接，默认关闭
 --tcp-only        按应用模式阻断所选应用全部非 DNS UDP，强制支持的应用回退到 TCP
+--trusted-dns     按应用模式经 SOCKS5 访问的外部 DNS；传空值保留系统 DNS 路径
 --log-level       debug/info/warn/error/silent
 ```
 
@@ -133,7 +232,7 @@ sudo mactun up -p socks5://127.0.0.1:7890 --interface en0 --gateway 192.168.1.1 
 - 按应用模式会自动探测本地代理程序当前连接的真实远端节点并添加绕行路由，防止代理自身再次进入 TUN。全局模式仍须用 `--bypass` 指定真实代理节点。
 - 自动网络模式检测到物理主 IPv4 地址被 DHCP 或漫游替换时，会先移除 TUN 路由并完整重建 engine，避免旧 scoped route 与 UDP flow 继续使用已删除的源地址。
 - 当前实现以未选应用可用性优先：极少数无法确认归属的流会保持直连，自动重建数据面时也存在短暂直连窗口。因此它不是严格防泄漏的 Apple Per-App VPN；需要强制 fail-closed 的场景应使用具备相应 entitlement/管理能力的 Network Extension。
-- 局域网已有的更精确路由会保持直连。按应用模式下系统 DNS 默认保留原有路径：本地解析器留在 loopback，外部解析器保持物理直连，以免未选应用受影响；这意味着选中应用存在 DNS 泄漏的取舍。全局模式才为外部系统 DNS 添加主机路由，并通过 SOCKS5 转发。
+- 局域网已有的更精确路由会保持直连。按应用模式启用 trusted DNS 时，进入 TUN 的 53 端口 DNS 会经 SOCKS5 转发；未启用时，本地解析器留在 loopback，外部解析器保持物理直连，以免未选应用受影响，但存在 DNS 泄漏的取舍。全局模式会为外部系统 DNS 添加主机路由，并通过 SOCKS5 转发。
 - `SIGKILL` 或断电无法执行即时清理；下一次 `sudo mactun up` 会清理残留，或手动运行 `sudo mactun down`。
 - 路由或 engine 清理失败时会保留可重试状态并报告 `stale`，不会把失败误报为已经停止。
 - 本工具目前只处理三层 IP 流量，不代理非 IP 二层协议。
