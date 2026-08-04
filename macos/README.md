@@ -53,6 +53,10 @@ root helper 在后台运行，关闭 MacTun 窗口不会自动停止代理。也
 sudo /path/to/MacTun.app/Contents/Resources/mactun down
 ```
 
+GUI 通过一个短生命周期的管理员 launcher，在独立 session/process group 中启动长期运行的 owner；owner 随后启动的 engine 会继承该 session/process group。因此 macOS 回收空闲的 `authtrampoline` 授权服务时，不会向 TUN 进程传递生命周期信号。命令行直接执行 `sudo mactun up` 时仍保持前台运行，并支持 `Ctrl-C` 清理。
+
+本次会话日志保存在 `/Library/Logs/MacTun/mactun.log`。再次启动前，GUI 会先把它原子轮转为 `/Library/Logs/MacTun/mactun.previous.log`，便于在手动重启后继续检查上一轮的退出原因。两个日志都只允许启动 MacTun 的本机用户读取（权限 `0600`）。
+
 ## 限制
 
 - 进程识别使用 macOS `libproc`，不是 Apple 的 Per-App VPN API。系统升级后可能需要适配。
@@ -68,6 +72,7 @@ sudo /path/to/MacTun.app/Contents/Resources/mactun down
 ## 安全设计
 
 - 管理员权限仅由系统授权窗口获取，不保存密码。
+- GUI 授权 launcher 只负责创建独立 session 后立即退出，长期运行的 TUN 不依赖 `authtrampoline` 的生命周期。
 - SOCKS5 配置通过权限为 `0600` 的临时 JSON 传入，root helper 读取后立即删除。
-- 代理密码不会传给 engine 子进程命令行，状态文件只保存脱敏后的地址。
+- 代理凭据不会传给 engine 子进程命令行，日志和状态文件只保存移除完整 userinfo 后的代理地址。
 - 每一条新增系统路由都会写入 `/var/run/mactun/state.json`，停止或异常退出时按相反顺序恢复。

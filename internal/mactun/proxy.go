@@ -56,13 +56,10 @@ func redactProxy(raw string) string {
 	if err != nil {
 		return "<invalid>"
 	}
-	if u.User != nil {
-		if name := u.User.Username(); name != "" {
-			u.User = url.UserPassword(name, "REDACTED")
-		} else {
-			u.User = nil
-		}
-	}
+	// Treat the complete userinfo component as a credential. Usernames can be
+	// identifying or secret too, so neither usernames nor passwords belong in
+	// logs or the persisted runtime state.
+	u.User = nil
 	return u.String()
 }
 

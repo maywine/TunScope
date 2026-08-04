@@ -30,7 +30,9 @@ final class TunController: ObservableObject {
     @Published var lastMessage: String?
     @Published private(set) var isBusy = false
 
-    private let logPath = "/private/tmp/com.gfheng.mactun.log"
+    private let logDirectory = "/Library/Logs/MacTun"
+    private let logPath = "/Library/Logs/MacTun/mactun.log"
+    private let previousLogPath = "/Library/Logs/MacTun/mactun.previous.log"
 
     init() {
         loadSettings()
@@ -125,12 +127,37 @@ final class TunController: ObservableObject {
 
                 configURL = try writeTemporaryConfig()
                 guard let configURL else { throw ControllerError.configurationWriteFailed }
+                let logOwner = "\(getuid()):\(getgid())"
                 let command = [
+                    "/bin/mkdir", "-p", shellQuote(logDirectory),
+                    "&&", "/bin/test", "!", "-L", shellQuote(logDirectory),
+                    "&&", "/bin/chmod", "0700", shellQuote(logDirectory),
+                    "&&", "/usr/sbin/chown", "0:0", shellQuote(logDirectory),
+                    "&&", "/bin/chmod", "-N", shellQuote(logDirectory),
+                    "&&", "/bin/test", "!", "-L", shellQuote(logPath),
+                    "&&", "(", "/bin/test", "!", "-e", shellQuote(logPath),
+                    "||", "/bin/test", "-f", shellQuote(logPath), ")",
+                    "&&", "/bin/test", "!", "-L", shellQuote(previousLogPath),
+                    "&&", "(", "/bin/test", "!", "-e", shellQuote(previousLogPath),
+                    "||", "/bin/test", "-f", shellQuote(previousLogPath), ")",
+                    "&&", "(", "/bin/test", "!", "-e", shellQuote(logPath),
+                    "||", "/bin/mv", "-f", shellQuote(logPath), shellQuote(previousLogPath), ")",
+                    "&&", "(", "/bin/test", "!", "-e", shellQuote(previousLogPath),
+                    "||", "(", "/usr/sbin/chown", logOwner, shellQuote(previousLogPath),
+                    "&&", "/bin/chmod", "-N", shellQuote(previousLogPath),
+                    "&&", "/bin/chmod", "0600", shellQuote(previousLogPath), ")", ")",
+                    "&&", "/usr/bin/touch", shellQuote(logPath),
+                    "&&", "/usr/sbin/chown", logOwner, shellQuote(logPath),
+                    "&&", "/bin/chmod", "-N", shellQuote(logPath),
+                    "&&", "/bin/chmod", "0600", shellQuote(logPath),
+                    "&&", "/bin/chmod", "0755", shellQuote(logDirectory),
+                    "&&", "umask", "077",
+                    "&&",
                     shellQuote(try helperURL().path),
-                    "up",
+                    "__launch-up",
                     "--config", shellQuote(configURL.path),
                     "--delete-config",
-                    ">", shellQuote(logPath), "2>&1", "</dev/null", "&"
+                    ">", shellQuote(logPath), "2>&1", "</dev/null"
                 ].joined(separator: " ")
                 try await runPrivilegedShell(command)
 

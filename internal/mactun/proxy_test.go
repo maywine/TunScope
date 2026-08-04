@@ -14,8 +14,19 @@ func TestValidateProxy(t *testing.T) {
 	if !info.Loopback || info.Port != 7890 {
 		t.Fatalf("unexpected info: %#v", info)
 	}
-	if got := redactProxy(info.URL.String()); got != "socks5://user:REDACTED@127.0.0.1:7890" {
+	if got := redactProxy(info.URL.String()); got != "socks5://127.0.0.1:7890" {
 		t.Fatalf("redacted URL = %q", got)
+	}
+}
+
+func TestRedactProxyRemovesAllUserInfo(t *testing.T) {
+	for _, raw := range []string{
+		"socks5://username@127.0.0.1:7890",
+		"socks5://user%40example.com:secret@127.0.0.1:7890",
+	} {
+		if got := redactProxy(raw); got != "socks5://127.0.0.1:7890" {
+			t.Errorf("redactProxy(%q) = %q", raw, got)
+		}
 	}
 }
 

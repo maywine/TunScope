@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 	"github.com/maywine/MacTun/internal/mactun"
 )
 
-const version = "0.3.11"
+const version = "0.3.12"
 
 type stringList []string
 
@@ -37,7 +38,48 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__engine" {
 		os.Exit(runEngineChild())
 	}
+	if len(os.Args) > 1 && os.Args[1] == "__launch-up" {
+		os.Exit(runDetachedUpLauncher(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// runDetachedUpLauncher is used only by the macOS GUI after administrator
+// authorization. Apple authtrampoline launches commands in its own process
+// group, which may later receive a lifecycle SIGHUP when that idle service is
+// reclaimed. Start the long-running owner atomically in a new session so both
+// it and the engine remain independent of the authorization service. Normal
+// CLI `mactun up` remains a foreground command with Ctrl-C handling.
+func runDetachedUpLauncher(args []string, stdout, stderr io.Writer) int {
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(stderr, "mactun launcher: administrator privileges are required")
+		return 1
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "mactun launcher: locate executable: %v\n", err)
+		return 1
+	}
+	childArgs := append([]string{"up"}, args...)
+	cmd := exec.Command(exe, childArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := configureDetachedProcess(cmd); err != nil {
+		fmt.Fprintf(stderr, "mactun launcher: configure detached owner: %v\n", err)
+		return 1
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(stderr, "mactun launcher: start detached owner: %v\n", err)
+		return 1
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Process.Release(); err != nil {
+		fmt.Fprintf(stderr, "mactun launcher: release detached owner PID %d: %v\n", pid, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "launcher: started detached mactun owner PID %d at %s\n", pid, time.Now().Format(time.RFC3339))
+	return 0
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
