@@ -12,7 +12,7 @@ MacTun 是仅在本机运行的轻量 macOS TUN 工具，把选定应用的 IPv4
 - 选中应用走本地 SOCKS5；其他应用由绑定物理网卡的 socket 配合接口作用域路由直连，避免直连流量再次进入 TUN；暂时无法识别的连接保持直连，已确认属于 engine 或归属冲突的连接仍会阻断以防回环。
 - 按应用模式默认把进入 TUN 的 53 端口 DNS 发往经 SOCKS5 到达的 trusted DNS；`127.0.0.1`/`::1` 等本地系统解析器仍留在 loopback。命令行将 `--trusted-dns` 设为空时，外部系统解析器才保持物理直连。
 
-数据面使用 [tun2socks](https://github.com/xjasonlyu/tun2socks) / gVisor，不安装内核扩展，也不引入第二套 Go。
+数据面使用 [tun2socks](https://github.com/xjasonlyu/tun2socks) / gVisor，不安装内核扩展。
 
 构建步骤见 [macos/README.md](macos/README.md)：
 
@@ -40,7 +40,7 @@ macOS 上的大多数应用先把域名交给系统共享的 `mDNSResponder` 解
      -> 本地 SOCKS5 -> 加密 DNS 上游 -> 正确 IP -> MacTun 按应用转发数据
 ```
 
-这也解释了为什么同一个浏览器里飞书等网站可能能打开，而 Google 等网站超时：数据代理本身可能正常，失败发生在更早的系统 DNS 阶段。反过来，如果把共享的 `mDNSResponder` DNS 流量简单地全部归入按应用 TUN，它实际上会变成全系统策略；TUN、代理或网络切换出现问题时，名单外应用的解析也会一起受到影响。
+另外如果把共享的 `mDNSResponder` DNS 流量简单地全部归入按应用 TUN，它实际上会变成全系统策略；TUN、代理或网络切换出现问题时，名单外应用的解析也会一起受到影响。
 
 dnscrypt-proxy 提供一个不随 Wi-Fi 改变的本地解析入口 `127.0.0.1:53`，并可把加密 DNS 上游显式交给本地 SOCKS5。这样可以绕过当前 Wi-Fi 的明文 DNS、DNS 污染和 scoped resolver 变化，同时让 MacTun 只负责 DNS 之后的按应用数据分流。名单内和名单外应用会共享 dnscrypt-proxy 的解析结果，但名单外应用的数据连接仍然直连。
 
