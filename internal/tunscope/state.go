@@ -42,6 +42,14 @@ func acquireLock() error {
 	if err := os.MkdirAll(stateDir(), 0755); err != nil {
 		return err
 	}
+	// The macOS GUI launches the privileged owner with umask 077 so temporary
+	// configuration and log files stay private. On the first run that umask also
+	// turns MkdirAll's requested 0755 into 0700, preventing the unprivileged GUI
+	// from reading the intentionally public 0644 state and lock metadata. Always
+	// normalize the directory after creation so status checks can reach them.
+	if err := os.Chmod(stateDir(), 0755); err != nil {
+		return fmt.Errorf("make state directory readable: %w", err)
+	}
 	f, err := os.OpenFile(lockPath(), os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return err

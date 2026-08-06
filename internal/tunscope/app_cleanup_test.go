@@ -428,3 +428,31 @@ func TestKernelLockCannotBeReleasedByContender(t *testing.T) {
 		t.Fatalf("lock permissions = %04o, want 0644 for unprivileged status reads", got)
 	}
 }
+
+func TestAcquireLockMakesStateMetadataReachableForStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TUNSCOPE_STATE_DIR", dir)
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0755 {
+		t.Fatalf("state directory permissions = %04o, want 0755 for unprivileged status reads", got)
+	}
+
+	if err := saveState(cleanupTestState()); err != nil {
+		t.Fatal(err)
+	}
+	stateInfo, err := os.Stat(statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stateInfo.Mode().Perm(); got != 0644 {
+		t.Fatalf("state permissions = %04o, want 0644 for unprivileged status reads", got)
+	}
+}
