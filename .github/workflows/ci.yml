@@ -31,7 +31,18 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - run: go test ./...
+      - name: Test Windows
+        shell: pwsh
+        run: |
+          $output = @(& go test -v ./... 2>&1)
+          $testExit = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($testExit -ne 0) {
+            $details = (($output | Select-Object -Last 80) -join "`n")
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Windows Go tests failed::$details"
+            exit $testExit
+          }
       - run: go vet ./...
       - run: New-Item -ItemType Directory -Force bin | Out-Null
       - run: go build -trimpath -ldflags "-s -w" -o bin/mactun-windows-amd64.exe ./cmd/mactun
