@@ -27,7 +27,19 @@ const (
 	windowsNetworkLossGrace    = 30 * time.Second
 )
 
-func (a *App) Up(cfg Config) (returnErr error) {
+func (a *App) Up(cfg Config) error {
+	return a.upWindows(cfg, nil, nil)
+}
+
+// UpAsWindowsService runs the same data plane as Up while accepting a stop
+// request from the Service Control Manager. onActive is called after all TUN
+// addresses and routes are committed, so the service does not report Running
+// before the data plane is actually usable.
+func (a *App) UpAsWindowsService(cfg Config, stop <-chan struct{}, onActive func()) error {
+	return a.upWindows(cfg, stop, onActive)
+}
+
+func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()) (returnErr error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return fmt.Errorf("administrator privileges are required; open an elevated Terminal")
 	}
@@ -239,7 +251,14 @@ func (a *App) Up(cfg Config) (returnErr error) {
 	if err := saveState(state); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "TUN is active on %s via %s; press Ctrl-C to stop\n", cfg.Device, physical.InterfaceAlias)
+	if onActive != nil {
+		onActive()
+	}
+	if serviceStop == nil {
+		fmt.Fprintf(a.out, "TUN is active on %s via %s; press Ctrl-C to stop\n", cfg.Device, physical.InterfaceAlias)
+	} else {
+		fmt.Fprintf(a.out, "TUN is active on %s via %s under Windows Service control\n", cfg.Device, physical.InterfaceAlias)
+	}
 	if len(cfg.Applications) > 0 {
 		fmt.Fprintf(a.out, "per-app mode is active for %d application(s); unselected and unknown owners stay on the physical interface\n", len(cfg.Applications))
 	}
@@ -265,6 +284,9 @@ activeLoop:
 		select {
 		case <-sigCh:
 			fmt.Fprintln(a.out, "received interrupt, restoring routes...")
+			break activeLoop
+		case <-serviceStop:
+			fmt.Fprintln(a.out, "received Windows Service stop request, restoring routes...")
 			break activeLoop
 		case eventErr := <-stopEventCh:
 			if eventErr != nil {

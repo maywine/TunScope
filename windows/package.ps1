@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Binary,
 
+    [string]$GuiBinary,
+
     [string]$Version,
 
     [string]$Destination = (Join-Path $PSScriptRoot '..\dist')
@@ -13,6 +15,14 @@ $ErrorActionPreference = 'Stop'
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath $resolvedBinary -PathType Leaf)) {
     throw "MacTun binary does not exist: $Binary"
+}
+
+$resolvedGuiBinary = $null
+if (-not [string]::IsNullOrWhiteSpace($GuiBinary)) {
+    $resolvedGuiBinary = (Resolve-Path -LiteralPath $GuiBinary -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath $resolvedGuiBinary -PathType Leaf)) {
+        throw "MacTun GUI binary does not exist: $GuiBinary"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -54,6 +64,9 @@ $checksumPath = "$archivePath.sha256"
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'mactun.exe')
+    if ($null -ne $resolvedGuiBinary) {
+        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'MacTun.GUI.exe')
+    }
     Copy-Item -LiteralPath $readme -Destination (Join-Path $stagingDirectory 'README.md')
     Copy-Item -LiteralPath $exampleConfig -Destination (Join-Path $stagingDirectory 'mactun.example.json')
     Copy-Item -LiteralPath $prepareWintun -Destination (Join-Path $stagingDirectory 'prepare-wintun.ps1')

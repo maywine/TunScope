@@ -13,6 +13,8 @@
 /macos/DataPlane/lib/libmactun.h
 /macos/DerivedData/
 /macos/com.apple.DeveloperTools/
+/windows/gui/bin/
+/windows/gui/obj/
 **/xcuserdata/
 *.xcuserstate
 .DS_Store

@@ -4,7 +4,14 @@ param(
 
     [string]$InstallDirectory = (Join-Path $env:ProgramFiles 'MacTun'),
 
-    [switch]$AddToMachinePath
+    [switch]$AddToMachinePath,
+
+    [ValidateSet('manual', 'automatic')]
+    [string]$ServiceStartup = 'manual',
+
+    [switch]$SkipServiceInstall,
+
+    [switch]$SkipStartMenuShortcut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,12 +61,27 @@ if (Test-Path -LiteralPath $installedExecutable -PathType Leaf) {
         }
     }
     if ($runningInstall) {
-        throw "The installed MacTun is running. Stop it manually with '$installedExecutable down', then run the installer again."
+        throw "The installed MacTun is running. Stop it manually with '$installedExecutable service stop' (or '$installedExecutable down' for foreground CLI mode), then run the installer again."
+    }
+}
+$installedGui = Join-Path $installPath 'MacTun.GUI.exe'
+if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
+    $runningGui = Get-Process -Name 'MacTun.GUI' -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            [string]::Equals($_.Path, $installedGui, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        catch {
+            $false
+        }
+    }
+    if ($runningGui) {
+        throw "The installed MacTun GUI is running. Close it, then run the installer again."
     }
 }
 
 $packageFiles = @(
     'mactun.exe',
+    'MacTun.GUI.exe',
     'wintun.dll',
     'README.md',
     'LICENSE.txt',
@@ -91,7 +113,31 @@ if ($PSCmdlet.ShouldProcess($installPath, 'Install MacTun')) {
         }
     }
 
+    if (-not $SkipServiceInstall) {
+        & $installedExecutable service install --startup $ServiceStartup
+        if ($LASTEXITCODE -ne 0) {
+            throw "MacTun files were copied, but Windows Service installation failed with exit code $LASTEXITCODE."
+        }
+    }
+
+    if (-not $SkipStartMenuShortcut -and (Test-Path -LiteralPath $installedGui -PathType Leaf)) {
+        $programsDirectory = [Environment]::GetFolderPath('CommonPrograms')
+        if ([string]::IsNullOrWhiteSpace($programsDirectory)) {
+            $programsDirectory = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+        }
+        $shortcutDirectory = Join-Path $programsDirectory 'MacTun'
+        New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
+        $shortcutPath = Join-Path $shortcutDirectory 'MacTun.lnk'
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $installedGui
+        $shortcut.WorkingDirectory = $installPath
+        $shortcut.Description = 'MacTun per-application TUN proxy'
+        $shortcut.Save()
+        Write-Host "Created Start Menu shortcut at $shortcutPath"
+    }
+
     Write-Host "Installed MacTun at $installPath"
-    Write-Host "Run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890' before starting TUN."
-    Write-Host 'The installer did not start or stop MacTun.'
+    Write-Host "Open MacTun.GUI.exe to save a config and start the service, or run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890'."
+    Write-Host 'The installer did not start or stop the MacTun data plane.'
 }

@@ -28,6 +28,9 @@ jobs:
         with:
           go-version: '1.23.x'
           cache: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - run: go test ./...
       - run: go vet ./...
       - run: New-Item -ItemType Directory -Force bin | Out-Null
@@ -39,11 +42,24 @@ jobs:
           if ($actual -ne 'mactun 0.3.12') {
             throw "Unexpected version output: $actual"
           }
+      - name: Build self-contained Windows GUI
+        shell: pwsh
+        run: |
+          dotnet publish .\windows\gui\MacTun.GUI.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:Version=0.3.12 `
+            -o .\bin\windows-gui
+          if (-not (Test-Path -LiteralPath .\bin\windows-gui\MacTun.GUI.exe -PathType Leaf)) {
+            throw 'Self-contained GUI executable was not produced'
+          }
       - name: Build and inspect Windows package
         shell: pwsh
         run: |
           .\windows\package.ps1 `
             -Binary .\bin\mactun-windows-amd64.exe `
+            -GuiBinary .\bin\windows-gui\MacTun.GUI.exe `
             -Destination .\dist
 
           $archives = @(Get-ChildItem -LiteralPath .\dist -Filter '*.zip' -File)
@@ -66,6 +82,7 @@ jobs:
           }
           $required = @(
             'mactun.exe',
+            'MacTun.GUI.exe',
             'wintun.dll',
             'README.md',
             'LICENSE.txt',

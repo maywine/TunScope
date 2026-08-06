@@ -37,6 +37,18 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__engine" {
 		os.Exit(runWindowsEngineChild(os.Args[2:]))
 	}
+	isService, err := isWindowsServiceProcess()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mactun: detect Windows Service context: %v\n", err)
+		os.Exit(1)
+	}
+	if isService {
+		if err := runWindowsService(); err != nil {
+			fmt.Fprintf(os.Stderr, "mactun: Windows Service failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -56,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = app.Status()
 	case "doctor":
 		err = runDoctor(app, args[1:], stderr)
+	case "service":
+		err = runWindowsServiceCommand(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "mactun %s\n", version)
 		return 0
@@ -150,6 +164,13 @@ func loadConfig(path string, cfg *mactun.Config) error {
 	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("decode config: %w", err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("decode config: multiple JSON values are not allowed")
+		}
+		return fmt.Errorf("decode config: %w", err)
+	}
 	return nil
 }
 
@@ -176,9 +197,12 @@ Usage:
   mactun down
   mactun status
   mactun doctor --proxy socks5://127.0.0.1:7890
+  mactun service install --startup manual
+  mactun service configure --stdin
+  mactun service start|stop|restart|status|uninstall
   mactun version
 
-Run "mactun up" and "mactun down" in an elevated Terminal. Press Ctrl-C to stop and restore routes.
+Run route and service mutations in an elevated Terminal. Foreground "up" still uses Ctrl-C; the service is controlled through SCM.
 `)
 }
 

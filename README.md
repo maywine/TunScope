@@ -1,6 +1,6 @@
 # MacTun
 
-MacTun 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5。当前提供完整的 macOS 应用/命令行版本，以及 Windows 10/11 x64 命令行版本。
+MacTun 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5。当前提供完整的 macOS 应用/命令行版本，以及带 WPF GUI、Windows Service 和 CLI 的 Windows 10/11 x64 版本。
 
 ## macOS 应用
 
@@ -22,9 +22,9 @@ open macos/MacTun.xcodeproj
 
 需要 macOS 13+、完整 Xcode 16+ 和系统 Go 1.23.1+。免费 Personal Team 或本机 ad-hoc 签名均可。
 
-## Windows 命令行版本
+## Windows 应用与服务
 
-Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。它支持全局模式和按应用模式，并沿用 MacTun 的状态恢复、精确路由清理与 SOCKS5 TCP/UDP 探测。
+Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。自包含的 WPF GUI 管理标准 Windows Service、应用列表和代理配置；服务只有在 TUN 路由真正激活后才向 SCM 报告 Running，并沿用 MacTun 的状态恢复、精确路由清理与 SOCKS5 TCP/UDP 探测。前台 CLI 仍然保留。
 
 ```powershell
 .\mactun.exe up `
@@ -32,7 +32,7 @@ Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
-Windows 10/11 x64 CLI 可从 [GitHub Releases](https://github.com/maywine/MacTun/releases) 获取带 SHA-256 的便携包；包内包含经官方归档校验取得的签名 `wintun.dll` 和一个不会自动启停 MacTun 的安装脚本。构建、安装、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。当前 Windows 阶段不包含 GUI 或 Windows Service；同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新运行 `up`。
+Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/MacTun/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。安装脚本默认安装手动启动的服务但不会启动或停止数据面。构建、安装、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新启动服务。
 
 ## 搭配 dnscrypt-proxy
 
@@ -255,6 +255,7 @@ sudo mactun up -p socks5://127.0.0.1:7890 --interface en0 --gateway 192.168.1.1 
 make test
 make build
 make windows-amd64
+make windows-gui
 ```
 
 建议启用后分别检查 IPv4、IPv6 和 DNS 出口，并确认本地代理工具的日志中可以看到 UDP 流量。
