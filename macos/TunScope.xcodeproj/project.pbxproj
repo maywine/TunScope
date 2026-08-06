@@ -12,6 +12,7 @@
 		100000000000000000000004 /* AppSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* AppSelection.swift */; };
 		100000000000000000000005 /* TargetApplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* TargetApplication.swift */; };
 		100000000000000000000006 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Security.framework */; };
+		100000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		200000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		200000000000000000000008 /* Developer.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Developer.xcconfig; sourceTree = "<group>"; };
 		200000000000000000000009 /* TunScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TunScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000010 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +57,7 @@
 				200000000000000000000004 /* AppSelection.swift */,
 				200000000000000000000005 /* TargetApplication.swift */,
 				200000000000000000000007 /* Info.plist */,
+				200000000000000000000010 /* Assets.xcassets */,
 			);
 			path = TunScopeApp;
 			sourceTree = "<group>";
@@ -129,7 +132,7 @@
 		600000000000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (100000000000000000000007 /* Assets.xcassets in Resources */, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
@@ -203,6 +206,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 200000000000000000000008 /* Developer.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -221,6 +225,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 200000000000000000000008 /* Developer.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;

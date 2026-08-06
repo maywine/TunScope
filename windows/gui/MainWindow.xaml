@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="TunScope" Height="780" Width="980"
         MinHeight="680" MinWidth="860"
+        Icon="Assets/TunScope.ico"
         WindowStartupLocation="CenterScreen"
         Loaded="Window_Loaded" Closing="Window_Closing"
         FontFamily="Segoe UI" Background="#F3F5F8">
