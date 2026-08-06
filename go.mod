@@ -1,4 +1,4 @@
-module github.com/maywine/MacTun
+module github.com/maywine/TunScope
 
 go 1.23.1
 

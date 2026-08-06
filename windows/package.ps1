@@ -14,25 +14,25 @@ $ErrorActionPreference = 'Stop'
 
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath $resolvedBinary -PathType Leaf)) {
-    throw "MacTun binary does not exist: $Binary"
+    throw "TunScope binary does not exist: $Binary"
 }
 
 $resolvedGuiBinary = $null
 if (-not [string]::IsNullOrWhiteSpace($GuiBinary)) {
     $resolvedGuiBinary = (Resolve-Path -LiteralPath $GuiBinary -ErrorAction Stop).Path
     if (-not (Test-Path -LiteralPath $resolvedGuiBinary -PathType Leaf)) {
-        throw "MacTun GUI binary does not exist: $GuiBinary"
+        throw "TunScope GUI binary does not exist: $GuiBinary"
     }
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $versionOutput = (& $resolvedBinary version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "Unable to read the MacTun version from $resolvedBinary"
+        throw "Unable to read the TunScope version from $resolvedBinary"
     }
-    $versionMatch = [regex]::Match($versionOutput, '^mactun\s+(.+)$')
+    $versionMatch = [regex]::Match($versionOutput, '^tunscope\s+(.+)$')
     if (-not $versionMatch.Success) {
-        throw "Unexpected MacTun version output: $versionOutput"
+        throw "Unexpected TunScope version output: $versionOutput"
     }
     $Version = $versionMatch.Groups[1].Value
 }
@@ -43,7 +43,7 @@ if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $readme = Join-Path $PSScriptRoot 'README.md'
-$exampleConfig = Join-Path $PSScriptRoot 'mactun.example.json'
+$exampleConfig = Join-Path $PSScriptRoot 'tunscope.example.json'
 $prepareWintun = Join-Path $PSScriptRoot 'prepare-wintun.ps1'
 $installer = Join-Path $PSScriptRoot 'install.ps1'
 $license = Join-Path $repositoryRoot 'LICENSE'
@@ -55,20 +55,20 @@ foreach ($requiredInput in $requiredInputs) {
 }
 
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
-$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mactun-package-" + [guid]::NewGuid().ToString('N'))
-$packageName = "mactun-$Version-windows-amd64"
+$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("tunscope-package-" + [guid]::NewGuid().ToString('N'))
+$packageName = "tunscope-$Version-windows-amd64"
 $stagingDirectory = Join-Path $temporaryRoot $packageName
 $archivePath = Join-Path $destinationPath "$packageName.zip"
 $checksumPath = "$archivePath.sha256"
 
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'mactun.exe')
+    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'tunscope.exe')
     if ($null -ne $resolvedGuiBinary) {
-        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'MacTun.GUI.exe')
+        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'TunScope.GUI.exe')
     }
     Copy-Item -LiteralPath $readme -Destination (Join-Path $stagingDirectory 'README.md')
-    Copy-Item -LiteralPath $exampleConfig -Destination (Join-Path $stagingDirectory 'mactun.example.json')
+    Copy-Item -LiteralPath $exampleConfig -Destination (Join-Path $stagingDirectory 'tunscope.example.json')
     Copy-Item -LiteralPath $prepareWintun -Destination (Join-Path $stagingDirectory 'prepare-wintun.ps1')
     Copy-Item -LiteralPath $installer -Destination (Join-Path $stagingDirectory 'install.ps1')
     Copy-Item -LiteralPath $license -Destination (Join-Path $stagingDirectory 'LICENSE.txt')

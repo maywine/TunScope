@@ -4,14 +4,14 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 OUTPUT_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
-OUTPUT="$OUTPUT_DIR/mactun"
+OUTPUT="$OUTPUT_DIR/tunscope"
 
 ARCH_LIST=${ARCHS:-${CURRENT_ARCH:-$(uname -m)}}
 case "$ARCH_LIST" in
     *undefined_arch*) ARCH_LIST=${NATIVE_ARCH_ACTUAL:-$(uname -m)} ;;
 esac
 
-TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mactun-helper.XXXXXX")
+TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tunscope-helper.XXXXXX")
 trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
 LIPO_INPUTS=""
 ARCH_COUNT=0
@@ -23,10 +23,10 @@ for ARCH in $ARCH_LIST; do
         x86_64) GO_ARCH=amd64 ;;
         *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
     esac
-    BINARY="$TEMP_DIR/mactun-$ARCH"
+    BINARY="$TEMP_DIR/tunscope-$ARCH"
     CGO_ENABLED=1 GOOS=darwin GOARCH="$GO_ARCH" \
         MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}" \
-        go build -trimpath -ldflags "-s -w" -o "$BINARY" ./cmd/mactun
+        go build -trimpath -ldflags "-s -w" -o "$BINARY" ./cmd/tunscope
     LIPO_INPUTS="$LIPO_INPUTS $BINARY"
     ARCH_COUNT=$((ARCH_COUNT + 1))
 done

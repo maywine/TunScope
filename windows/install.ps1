@@ -2,7 +2,7 @@
 param(
     [string]$SourceDirectory = $PSScriptRoot,
 
-    [string]$InstallDirectory = (Join-Path $env:ProgramFiles 'MacTun'),
+    [string]$InstallDirectory = (Join-Path $env:ProgramFiles 'TunScope'),
 
     [switch]$AddToMachinePath,
 
@@ -42,7 +42,7 @@ if ([string]::Equals($sourcePath.TrimEnd('\'), $installPath, [System.StringCompa
     throw "SourceDirectory and InstallDirectory must be different: $installPath"
 }
 
-$requiredFiles = @('mactun.exe', 'wintun.dll')
+$requiredFiles = @('tunscope.exe', 'wintun.dll')
 foreach ($requiredFile in $requiredFiles) {
     $sourceFile = Join-Path $sourcePath $requiredFile
     if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
@@ -50,9 +50,9 @@ foreach ($requiredFile in $requiredFiles) {
     }
 }
 
-$installedExecutable = Join-Path $installPath 'mactun.exe'
+$installedExecutable = Join-Path $installPath 'tunscope.exe'
 if (Test-Path -LiteralPath $installedExecutable -PathType Leaf) {
-    $runningInstall = Get-Process -Name 'mactun' -ErrorAction SilentlyContinue | Where-Object {
+    $runningInstall = Get-Process -Name 'tunscope' -ErrorAction SilentlyContinue | Where-Object {
         try {
             [string]::Equals($_.Path, $installedExecutable, [System.StringComparison]::OrdinalIgnoreCase)
         }
@@ -61,12 +61,12 @@ if (Test-Path -LiteralPath $installedExecutable -PathType Leaf) {
         }
     }
     if ($runningInstall) {
-        throw "The installed MacTun is running. Stop it manually with '$installedExecutable service stop' (or '$installedExecutable down' for foreground CLI mode), then run the installer again."
+        throw "The installed TunScope is running. Stop it manually with '$installedExecutable service stop' (or '$installedExecutable down' for foreground CLI mode), then run the installer again."
     }
 }
-$installedGui = Join-Path $installPath 'MacTun.GUI.exe'
+$installedGui = Join-Path $installPath 'TunScope.GUI.exe'
 if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
-    $runningGui = Get-Process -Name 'MacTun.GUI' -ErrorAction SilentlyContinue | Where-Object {
+    $runningGui = Get-Process -Name 'TunScope.GUI' -ErrorAction SilentlyContinue | Where-Object {
         try {
             [string]::Equals($_.Path, $installedGui, [System.StringComparison]::OrdinalIgnoreCase)
         }
@@ -75,23 +75,23 @@ if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
         }
     }
     if ($runningGui) {
-        throw "The installed MacTun GUI is running. Close it, then run the installer again."
+        throw "The installed TunScope GUI is running. Close it, then run the installer again."
     }
 }
 
 $packageFiles = @(
-    'mactun.exe',
-    'MacTun.GUI.exe',
+    'tunscope.exe',
+    'TunScope.GUI.exe',
     'wintun.dll',
     'README.md',
     'LICENSE.txt',
     'WINTUN-LICENSE.txt',
-    'mactun.example.json',
+    'tunscope.example.json',
     'prepare-wintun.ps1',
     'install.ps1'
 )
 
-if ($PSCmdlet.ShouldProcess($installPath, 'Install MacTun')) {
+if ($PSCmdlet.ShouldProcess($installPath, 'Install TunScope')) {
     New-Item -ItemType Directory -Path $installPath -Force | Out-Null
     foreach ($packageFile in $packageFiles) {
         $sourceFile = Join-Path $sourcePath $packageFile
@@ -109,14 +109,14 @@ if ($PSCmdlet.ShouldProcess($installPath, 'Install MacTun')) {
         if (-not $alreadyPresent) {
             $newMachinePath = (($pathEntries + $installPath) -join ';')
             [Environment]::SetEnvironmentVariable('Path', $newMachinePath, 'Machine')
-            Write-Host 'Added MacTun to the machine PATH. Open a new terminal to use it.'
+            Write-Host 'Added TunScope to the machine PATH. Open a new terminal to use it.'
         }
     }
 
     if (-not $SkipServiceInstall) {
         & $installedExecutable service install --startup $ServiceStartup
         if ($LASTEXITCODE -ne 0) {
-            throw "MacTun files were copied, but Windows Service installation failed with exit code $LASTEXITCODE."
+            throw "TunScope files were copied, but Windows Service installation failed with exit code $LASTEXITCODE."
         }
     }
 
@@ -125,19 +125,19 @@ if ($PSCmdlet.ShouldProcess($installPath, 'Install MacTun')) {
         if ([string]::IsNullOrWhiteSpace($programsDirectory)) {
             $programsDirectory = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
         }
-        $shortcutDirectory = Join-Path $programsDirectory 'MacTun'
+        $shortcutDirectory = Join-Path $programsDirectory 'TunScope'
         New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
-        $shortcutPath = Join-Path $shortcutDirectory 'MacTun.lnk'
+        $shortcutPath = Join-Path $shortcutDirectory 'TunScope.lnk'
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $installedGui
         $shortcut.WorkingDirectory = $installPath
-        $shortcut.Description = 'MacTun per-application TUN proxy'
+        $shortcut.Description = 'TunScope per-application TUN proxy'
         $shortcut.Save()
         Write-Host "Created Start Menu shortcut at $shortcutPath"
     }
 
-    Write-Host "Installed MacTun at $installPath"
-    Write-Host "Open MacTun.GUI.exe to save a config and start the service, or run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890'."
-    Write-Host 'The installer did not start or stop the MacTun data plane.'
+    Write-Host "Installed TunScope at $installPath"
+    Write-Host "Open TunScope.GUI.exe to save a config and start the service, or run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890'."
+    Write-Host 'The installer did not start or stop the TunScope data plane.'
 }

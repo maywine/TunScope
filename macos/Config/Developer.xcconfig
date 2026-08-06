@@ -1,6 +1,6 @@
 // Local ad-hoc signing: no Apple Developer account is required.
 DEVELOPMENT_TEAM =
-MACTUN_BUNDLE_ID = com.gfheng.mactun
+TUNSCOPE_BUNDLE_ID = com.gfheng.tunscope
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
 MACOSX_DEPLOYMENT_TARGET = 13.0

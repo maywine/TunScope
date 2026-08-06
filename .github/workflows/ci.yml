@@ -45,32 +45,32 @@ jobs:
           }
       - run: go vet ./...
       - run: New-Item -ItemType Directory -Force bin | Out-Null
-      - run: go build -trimpath -ldflags "-s -w" -o bin/mactun-windows-amd64.exe ./cmd/mactun
+      - run: go build -trimpath -ldflags "-s -w" -o bin/tunscope-windows-amd64.exe ./cmd/tunscope
       - name: Verify Windows binary version
         shell: pwsh
         run: |
-          $actual = (& .\bin\mactun-windows-amd64.exe version | Out-String).Trim()
-          if ($actual -ne 'mactun 0.3.12') {
+          $actual = (& .\bin\tunscope-windows-amd64.exe version | Out-String).Trim()
+          if ($actual -ne 'tunscope 0.3.12') {
             throw "Unexpected version output: $actual"
           }
       - name: Build self-contained Windows GUI
         shell: pwsh
         run: |
-          dotnet publish .\windows\gui\MacTun.GUI.csproj `
+          dotnet publish .\windows\gui\TunScope.GUI.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
             -p:Version=0.3.12 `
             -o .\bin\windows-gui
-          if (-not (Test-Path -LiteralPath .\bin\windows-gui\MacTun.GUI.exe -PathType Leaf)) {
+          if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.GUI.exe -PathType Leaf)) {
             throw 'Self-contained GUI executable was not produced'
           }
       - name: Build and inspect Windows package
         shell: pwsh
         run: |
           .\windows\package.ps1 `
-            -Binary .\bin\mactun-windows-amd64.exe `
-            -GuiBinary .\bin\windows-gui\MacTun.GUI.exe `
+            -Binary .\bin\tunscope-windows-amd64.exe `
+            -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
             -Destination .\dist
 
           $archives = @(Get-ChildItem -LiteralPath .\dist -Filter '*.zip' -File)
@@ -85,20 +85,20 @@ jobs:
             throw "Package checksum mismatch: expected $expected, got $actual"
           }
 
-          $extractPath = Join-Path $env:RUNNER_TEMP 'mactun-package-check'
+          $extractPath = Join-Path $env:RUNNER_TEMP 'tunscope-package-check'
           Expand-Archive -LiteralPath $archive.FullName -DestinationPath $extractPath
           $packageRoot = @(Get-ChildItem -LiteralPath $extractPath -Directory)
           if ($packageRoot.Count -ne 1) {
             throw "Expected one package root, found $($packageRoot.Count)"
           }
           $required = @(
-            'mactun.exe',
-            'MacTun.GUI.exe',
+            'tunscope.exe',
+            'TunScope.GUI.exe',
             'wintun.dll',
             'README.md',
             'LICENSE.txt',
             'WINTUN-LICENSE.txt',
-            'mactun.example.json',
+            'tunscope.example.json',
             'prepare-wintun.ps1',
             'install.ps1'
           )
@@ -110,11 +110,11 @@ jobs:
           }
           & (Join-Path $packageRoot[0].FullName 'install.ps1') `
             -SourceDirectory $packageRoot[0].FullName `
-            -InstallDirectory (Join-Path $env:RUNNER_TEMP 'MacTun-install-check') `
+            -InstallDirectory (Join-Path $env:RUNNER_TEMP 'TunScope-install-check') `
             -WhatIf
       - uses: actions/upload-artifact@v4
         with:
-          name: mactun-windows-amd64
+          name: tunscope-windows-amd64
           path: |
             dist/*.zip
             dist/*.sha256

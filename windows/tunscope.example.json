@@ -1,0 +1,15 @@
+{
+  "proxy": "socks5://127.0.0.1:7890",
+  "device": "TunScope",
+  "bypass": [
+    "node.example.com"
+  ],
+  "applications": [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  ],
+  "mtu": 1500,
+  "logLevel": "info",
+  "autoBypass": false,
+  "ipv6": true,
+  "trustedDNS": "8.8.8.8:53"
+}

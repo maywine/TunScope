@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $version = '0.14.1'
 $archiveUrl = "https://www.wintun.net/builds/wintun-$version.zip"
 $expectedSha256 = '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51'
-$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mactun-wintun-" + [guid]::NewGuid().ToString('N'))
+$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("tunscope-wintun-" + [guid]::NewGuid().ToString('N'))
 $archivePath = Join-Path $temporaryRoot 'wintun.zip'
 $extractPath = Join-Path $temporaryRoot 'extract'
 

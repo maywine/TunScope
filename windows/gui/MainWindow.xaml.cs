@@ -11,7 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
-namespace MacTun.GUI;
+namespace TunScope.GUI;
 
 public partial class MainWindow : Window
 {
@@ -27,10 +27,10 @@ public partial class MainWindow : Window
     private bool _busy;
     private bool _refreshing;
 
-    private string CliPath => Path.Combine(AppContext.BaseDirectory, "mactun.exe");
+    private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope.exe");
     private static string DefaultServiceDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "MacTun",
+        "TunScope",
         "service");
     private static string DefaultConfigPath => Path.Combine(DefaultServiceDirectory, "config.json");
     private static string DefaultLogPath => Path.Combine(DefaultServiceDirectory, "service.log");
@@ -47,7 +47,7 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(CliPath))
         {
-            SetStatus("缺少 mactun.exe", $"GUI 必须与 mactun.exe 位于同一目录：{CliPath}", StatusKind.Error);
+            SetStatus("缺少 tunscope.exe", $"GUI 必须与 tunscope.exe 位于同一目录：{CliPath}", StatusKind.Error);
             UpdateButtons();
             return;
         }
@@ -58,8 +58,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"读取服务配置失败：\n{ex.Message}", "MacTun", MessageBoxButton.OK, MessageBoxImage.Warning);
-            ApplyConfiguration(new MacTunConfig());
+            MessageBox.Show(this, $"读取服务配置失败：\n{ex.Message}", "TunScope", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ApplyConfiguration(new TunScopeConfig());
         }
         await RefreshStatusAsync(force: true);
         _refreshTimer.Start();
@@ -75,7 +75,7 @@ public partial class MainWindow : Window
         var configPath = _lastStatus?.ConfigPath ?? DefaultConfigPath;
         if (!File.Exists(configPath))
         {
-            ApplyConfiguration(new MacTunConfig());
+            ApplyConfiguration(new TunScopeConfig());
             return;
         }
 
@@ -86,15 +86,15 @@ public partial class MainWindow : Window
             FileShare.ReadWrite | FileShare.Delete,
             4096,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        var config = await JsonSerializer.DeserializeAsync<MacTunConfig>(stream, JsonOptions)
+        var config = await JsonSerializer.DeserializeAsync<TunScopeConfig>(stream, JsonOptions)
                      ?? throw new InvalidDataException("配置文件内容为空");
         ApplyConfiguration(config);
     }
 
-    private void ApplyConfiguration(MacTunConfig config)
+    private void ApplyConfiguration(TunScopeConfig config)
     {
         ProxyTextBox.Text = config.Proxy ?? string.Empty;
-        DeviceTextBox.Text = string.IsNullOrWhiteSpace(config.Device) ? "MacTun" : config.Device;
+        DeviceTextBox.Text = string.IsNullOrWhiteSpace(config.Device) ? "TunScope" : config.Device;
         InterfaceTextBox.Text = config.Interface ?? string.Empty;
         GatewayTextBox.Text = config.Gateway4 ?? string.Empty;
         TrustedDnsTextBox.Text = config.TrustedDns ?? string.Empty;
@@ -128,7 +128,7 @@ public partial class MainWindow : Window
         LogLevelComboBox.SelectedIndex = 1;
     }
 
-    private MacTunConfig ReadConfigurationFromUi()
+    private TunScopeConfig ReadConfigurationFromUi()
     {
         if (!int.TryParse(MtuTextBox.Text.Trim(), out var mtu) || mtu is < 1280 or > 9000)
         {
@@ -140,7 +140,7 @@ public partial class MainWindow : Window
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new MacTunConfig
+        return new TunScopeConfig
         {
             Proxy = ProxyTextBox.Text.Trim(),
             Device = DeviceTextBox.Text.Trim(),
@@ -180,7 +180,7 @@ public partial class MainWindow : Window
         var answer = MessageBox.Show(
             this,
             "Windows Service 尚未安装。是否先安装服务？",
-            "MacTun",
+            "TunScope",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes)
@@ -204,7 +204,7 @@ public partial class MainWindow : Window
         if (MessageBox.Show(
                 this,
                 "卸载服务会先安全停止 TUN 并恢复路由。配置和日志会保留。继续吗？",
-                "MacTun",
+                "TunScope",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
@@ -307,7 +307,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             OperationText.Text = "操作失败";
-            MessageBox.Show(this, ex.Message, "MacTun", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, "TunScope", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -435,7 +435,7 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(CliPath))
         {
-            throw new FileNotFoundException("找不到 mactun.exe", CliPath);
+            throw new FileNotFoundException("找不到 tunscope.exe", CliPath);
         }
         var startInfo = new ProcessStartInfo
         {
@@ -457,7 +457,7 @@ public partial class MainWindow : Window
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
-            throw new InvalidOperationException("无法启动 mactun.exe");
+            throw new InvalidOperationException("无法启动 tunscope.exe");
         }
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -476,7 +476,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException("mactun 命令超过 75 秒仍未完成");
+            throw new TimeoutException("tunscope 命令超过 75 秒仍未完成");
         }
         var stdout = (await stdoutTask).Trim();
         var stderr = (await stderrTask).Trim();
@@ -548,13 +548,13 @@ public partial class MainWindow : Window
     private sealed record CliResult(int ExitCode, string Stdout, string ErrorText);
 }
 
-public sealed class MacTunConfig
+public sealed class TunScopeConfig
 {
     [JsonPropertyName("proxy")]
     public string Proxy { get; set; } = "socks5://127.0.0.1:7890";
 
     [JsonPropertyName("device")]
-    public string Device { get; set; } = "MacTun";
+    public string Device { get; set; } = "TunScope";
 
     [JsonPropertyName("interface")]
     public string Interface { get; set; } = string.Empty;

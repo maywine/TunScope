@@ -1,6 +1,6 @@
 /bin/
 /dist/
-/mactun
+/tunscope
 /AGENTS.md
 /sources/
 /.gocache*/
@@ -9,8 +9,8 @@
 /.buildcache/
 /.depscache/
 /.swiftcache/
-/macos/DataPlane/lib/libmactun.a
-/macos/DataPlane/lib/libmactun.h
+/macos/DataPlane/lib/libtunscope.a
+/macos/DataPlane/lib/libtunscope.h
 /macos/DerivedData/
 /macos/com.apple.DeveloperTools/
 /windows/gui/bin/

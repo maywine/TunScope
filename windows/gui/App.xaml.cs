@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Threading;
 
-namespace MacTun.GUI;
+namespace TunScope.GUI;
 
 public partial class App : Application
 {
@@ -14,7 +14,7 @@ public partial class App : Application
     {
         MessageBox.Show(
             e.Exception.Message,
-            "MacTun",
+            "TunScope",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
         e.Handled = true;

@@ -33,7 +33,7 @@ jobs:
             throw "Release tag must look like v0.3.12 or v0.3.12-rc.1: $env:GITHUB_REF_NAME"
           }
           $version = $tagMatch.Groups['version'].Value
-          "MACTUN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TUNSCOPE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: go test ./...
       - run: go vet ./...
       - name: Build versioned Windows binary
@@ -42,33 +42,33 @@ jobs:
           New-Item -ItemType Directory -Force bin | Out-Null
           go build `
             -trimpath `
-            -ldflags "-s -w -X main.version=$env:MACTUN_VERSION" `
-            -o bin/mactun-windows-amd64.exe `
-            ./cmd/mactun
+            -ldflags "-s -w -X main.version=$env:TUNSCOPE_VERSION" `
+            -o bin/tunscope-windows-amd64.exe `
+            ./cmd/tunscope
 
-          $actual = (& .\bin\mactun-windows-amd64.exe version | Out-String).Trim()
-          $expected = "mactun $env:MACTUN_VERSION"
+          $actual = (& .\bin\tunscope-windows-amd64.exe version | Out-String).Trim()
+          $expected = "tunscope $env:TUNSCOPE_VERSION"
           if ($actual -ne $expected) {
             throw "Version injection failed: expected '$expected', got '$actual'"
           }
       - name: Create signed-driver Windows package
         shell: pwsh
         run: |
-          dotnet publish .\windows\gui\MacTun.GUI.csproj `
+          dotnet publish .\windows\gui\TunScope.GUI.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
-            -p:Version=$env:MACTUN_VERSION `
+            -p:Version=$env:TUNSCOPE_VERSION `
             -o .\bin\windows-gui
 
           .\windows\package.ps1 `
-            -Binary .\bin\mactun-windows-amd64.exe `
-            -GuiBinary .\bin\windows-gui\MacTun.GUI.exe `
-            -Version $env:MACTUN_VERSION `
+            -Binary .\bin\tunscope-windows-amd64.exe `
+            -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
+            -Version $env:TUNSCOPE_VERSION `
             -Destination .\dist
       - uses: actions/upload-artifact@v4
         with:
-          name: mactun-${{ github.ref_name }}-windows-amd64
+          name: tunscope-${{ github.ref_name }}-windows-amd64
           path: |
             dist/*.zip
             dist/*.sha256
@@ -106,11 +106,11 @@ jobs:
             '--repo',
             $env:GITHUB_REPOSITORY,
             '--title',
-            "MacTun $env:GITHUB_REF_NAME",
+            "TunScope $env:GITHUB_REF_NAME",
             '--generate-notes',
             '--verify-tag'
           )
-          if ($env:MACTUN_VERSION.Contains('-')) {
+          if ($env:TUNSCOPE_VERSION.Contains('-')) {
             $arguments += '--prerelease'
           }
           & gh @arguments
