@@ -1,10 +1,11 @@
-//go:build darwin
+//go:build windows
 
 package mactun
 
 import (
 	"context"
 	"fmt"
+	"math/bits"
 	"net"
 	"net/netip"
 	"sync"
@@ -12,12 +13,17 @@ import (
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
-	"golang.org/x/sys/unix"
+	"golang.org/x/sys/windows"
 )
 
-// boundDirectDialer is used only for applications that are not selected.
-// Binding this branch, instead of tun2socks' global dialer, lets a local
-// SOCKS5 server keep using loopback while direct traffic bypasses TUN routes.
+const (
+	windowsIPUnicastIF   = 31
+	windowsIPv6UnicastIF = 31
+)
+
+// boundDirectDialer constrains unselected application traffic to the physical
+// Windows interface. This is the Windows equivalent of Darwin IP_BOUND_IF and
+// prevents the direct branch from being captured by Wintun again.
 type boundDirectDialer struct {
 	interface4Index int
 	interface6Index int
@@ -48,6 +54,9 @@ func newBoundDirectDialer(interface4, interface6, source4 string) (proxy.Dialer,
 }
 
 func (d *boundDirectDialer) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
+	if metadata == nil {
+		return nil, fmt.Errorf("direct TCP metadata is nil")
+	}
 	network := "tcp4"
 	if metadata.DstIP.Is6() {
 		network = "tcp6"
@@ -73,6 +82,9 @@ func (d *boundDirectDialer) DialContext(ctx context.Context, metadata *M.Metadat
 }
 
 func (d *boundDirectDialer) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
+	if metadata == nil {
+		return nil, fmt.Errorf("direct UDP metadata is nil")
+	}
 	network := "udp4"
 	address := "0.0.0.0:0"
 	if metadata.DstIP.Is6() {
@@ -128,9 +140,11 @@ func (d *boundDirectDialer) control(ipv6 bool) (func(string, string, syscall.Raw
 		if err := raw.Control(func(fd uintptr) {
 			switch network {
 			case "tcp4", "udp4":
-				socketErr = unix.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_BOUND_IF, index)
+				// IP_UNICAST_IF requires the index in network byte order.
+				value := bits.ReverseBytes32(uint32(index))
+				socketErr = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, windowsIPUnicastIF, int(value))
 			case "tcp6", "udp6":
-				socketErr = unix.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF, index)
+				socketErr = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, windowsIPv6UnicastIF, index)
 			default:
 				socketErr = fmt.Errorf("unsupported direct network %s", network)
 			}

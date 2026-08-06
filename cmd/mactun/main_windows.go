@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build windows
 
 package main
 
@@ -9,11 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	_ "github.com/xjasonlyu/tun2socks/v2/dns"
@@ -28,60 +27,19 @@ const version = "0.3.12"
 type stringList []string
 
 func (s *stringList) String() string { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error {
-	if strings.TrimSpace(v) == "" {
+func (s *stringList) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
 		return errors.New("value cannot be empty")
 	}
-	*s = append(*s, v)
+	*s = append(*s, value)
 	return nil
 }
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__engine" {
-		os.Exit(runEngineChild())
-	}
-	if len(os.Args) > 1 && os.Args[1] == "__launch-up" {
-		os.Exit(runDetachedUpLauncher(os.Args[2:], os.Stdout, os.Stderr))
+		os.Exit(runWindowsEngineChild(os.Args[2:]))
 	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
-}
-
-// runDetachedUpLauncher is used only by the macOS GUI after administrator
-// authorization. Apple authtrampoline launches commands in its own process
-// group, which may later receive a lifecycle SIGHUP when that idle service is
-// reclaimed. Start the long-running owner atomically in a new session so both
-// it and the engine remain independent of the authorization service. Normal
-// CLI `mactun up` remains a foreground command with Ctrl-C handling.
-func runDetachedUpLauncher(args []string, stdout, stderr io.Writer) int {
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(stderr, "mactun launcher: administrator privileges are required")
-		return 1
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(stderr, "mactun launcher: locate executable: %v\n", err)
-		return 1
-	}
-	childArgs := append([]string{"up"}, args...)
-	cmd := exec.Command(exe, childArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := configureDetachedProcess(cmd); err != nil {
-		fmt.Fprintf(stderr, "mactun launcher: configure detached owner: %v\n", err)
-		return 1
-	}
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(stderr, "mactun launcher: start detached owner: %v\n", err)
-		return 1
-	}
-	pid := cmd.Process.Pid
-	if err := cmd.Process.Release(); err != nil {
-		fmt.Fprintf(stderr, "mactun launcher: release detached owner PID %d: %v\n", pid, err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "launcher: started detached mactun owner PID %d at %s\n", pid, time.Now().Format(time.RFC3339))
-	return 0
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -89,7 +47,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 2
 	}
-
 	app := mactun.New(stdout, stderr)
 	var err error
 	switch args[0] {
@@ -127,7 +84,6 @@ func runUp(app *mactun.App, args []string, stderr io.Writer) error {
 			return err
 		}
 	}
-
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bypass := stringList(append([]string(nil), cfg.Bypass...))
@@ -139,16 +95,16 @@ func runUp(app *mactun.App, args []string, stderr io.Writer) error {
 	fs.StringVar(&cfg.Proxy, "proxy", proxyDefault, "local SOCKS5 URL, for example socks5://127.0.0.1:7890")
 	fs.StringVar(&cfg.Proxy, "p", proxyDefault, "short form of --proxy")
 	fs.Var(&bypass, "bypass", "proxy server IP, CIDR, or hostname to keep outside TUN (repeatable)")
-	fs.Var(&applications, "app", "application bundle or executable to proxy (repeatable)")
-	fs.StringVar(&cfg.Interface, "interface", cfg.Interface, "physical interface (auto-detected by default)")
+	fs.Var(&applications, "app", "application executable to proxy (repeatable)")
+	fs.StringVar(&cfg.Interface, "interface", cfg.Interface, "physical adapter name (auto-detected by default)")
 	fs.StringVar(&cfg.Gateway4, "gateway", cfg.Gateway4, "physical IPv4 gateway (auto-detected by default)")
-	fs.StringVar(&cfg.Device, "device", cfg.Device, "utun device name")
+	fs.StringVar(&cfg.Device, "device", cfg.Device, "Wintun adapter name")
 	fs.IntVar(&cfg.MTU, "mtu", cfg.MTU, "TUN MTU")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "engine log level: debug, info, warn, error, silent")
 	fs.BoolVar(&cfg.AutoBypass, "auto-bypass", cfg.AutoBypass, "discover current remote peers of a loopback proxy (best effort)")
 	fs.BoolVar(&cfg.IPv6, "ipv6", cfg.IPv6, "capture IPv6 traffic as well as IPv4")
-	fs.BoolVar(&cfg.TCPOnly, "tcp-only", cfg.TCPOnly, "block selected-app non-DNS UDP so supported applications use TCP")
-	fs.StringVar(&cfg.TrustedDNS, "trusted-dns", cfg.TrustedDNS, "DNS resolver reached through SOCKS5 in per-app mode (empty keeps system DNS direct)")
+	fs.BoolVar(&cfg.TCPOnly, "tcp-only", cfg.TCPOnly, "block selected-application non-DNS UDP for TCP fallback")
+	fs.StringVar(&cfg.TrustedDNS, "trusted-dns", cfg.TrustedDNS, "DNS resolver reached through SOCKS5 in per-app mode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -186,12 +142,12 @@ func loadConfig(path string, cfg *mactun.Config) error {
 	if !info.Mode().IsRegular() || info.Size() > 64<<10 {
 		return fmt.Errorf("config must be a regular file no larger than 64 KiB")
 	}
-	f, err := os.Open(clean)
+	file, err := os.Open(clean)
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
 	}
-	defer f.Close()
-	decoder := json.NewDecoder(io.LimitReader(f, 64<<10))
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("decode config: %w", err)
@@ -214,33 +170,51 @@ func runDoctor(app *mactun.App, args []string, stderr io.Writer) error {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `mactun - lightweight TUN mode for macOS
+	fmt.Fprint(w, `mactun - lightweight per-application TUN proxy for Windows
 
 Usage:
-  mactun up --proxy socks5://127.0.0.1:7890 --app /Applications/Example.app
-  mactun up --config /path/to/config.json
+  mactun up --proxy socks5://127.0.0.1:7890 --app "C:\Path\Example.exe"
+  mactun up --config C:\path\to\config.json
   mactun down
   mactun status
   mactun doctor --proxy socks5://127.0.0.1:7890
   mactun version
 
-Run "mactun up" and "mactun down" with sudo. Press Ctrl-C to stop and restore routes.
+Run "mactun up" and "mactun down" in an elevated Terminal. Press Ctrl-C to stop and restore routes.
 `)
 }
 
-// runEngineChild hosts the tun2socks data plane inside the same binary. The
-// configuration arrives through fd 3 so proxy credentials are not exposed in
-// the process list.
-func runEngineChild() int {
-	f := os.NewFile(3, "mactun-engine-config")
-	if f == nil {
-		fmt.Fprintln(os.Stderr, "engine: missing configuration fd")
+func runWindowsEngineChild(args []string) int {
+	fs := flag.NewFlagSet("__engine", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	commandHandleText := fs.String("command-handle", "", "internal command pipe")
+	responseHandleText := fs.String("response-handle", "", "internal response pipe")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2
 	}
-	defer f.Close()
+	commandHandle, err := strconv.ParseUint(*commandHandleText, 10, 64)
+	if err != nil || commandHandle == 0 {
+		fmt.Fprintln(os.Stderr, "engine: invalid command handle")
+		return 2
+	}
+	responseHandle, err := strconv.ParseUint(*responseHandleText, 10, 64)
+	if err != nil || responseHandle == 0 {
+		fmt.Fprintln(os.Stderr, "engine: invalid response handle")
+		return 2
+	}
+	commandFile := os.NewFile(uintptr(commandHandle), "mactun-engine-commands")
+	responseFile := os.NewFile(uintptr(responseHandle), "mactun-engine-responses")
+	if commandFile == nil || responseFile == nil {
+		fmt.Fprintln(os.Stderr, "engine: inherited control pipes are unavailable")
+		return 2
+	}
+	defer commandFile.Close()
+	defer responseFile.Close()
 
 	var cfg mactun.EngineConfig
-	if err := json.NewDecoder(io.LimitReader(f, 64<<10)).Decode(&cfg); err != nil {
+	decoder := json.NewDecoder(io.LimitReader(os.Stdin, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "engine: invalid configuration: %v\n", err)
 		return 2
 	}
@@ -248,18 +222,6 @@ func runEngineChild() int {
 		fmt.Fprintln(os.Stderr, "engine: incomplete configuration")
 		return 2
 	}
-	commandFile := os.NewFile(4, "mactun-engine-commands")
-	responseFile := os.NewFile(5, "mactun-engine-responses")
-	if commandFile == nil || responseFile == nil {
-		fmt.Fprintln(os.Stderr, "engine: missing control pipes")
-		return 2
-	}
-	defer commandFile.Close()
-	defer responseFile.Close()
-
-	stopCh := make(chan os.Signal, 1)
-	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(stopCh)
 
 	key := &engine.Key{
 		Device:     cfg.Device,
@@ -276,10 +238,8 @@ func runEngineChild() int {
 		Close() error
 	}
 	var activeDialer networkDialer
-	var perAppDialer *mactun.PerAppDialer
 	if len(cfg.Applications) > 0 {
-		var err error
-		perAppDialer, err = mactun.NewPerAppDialer(
+		perApp, err := mactun.NewPerAppDialer(
 			cfg.Proxy,
 			cfg.Applications,
 			cfg.ProxyUDP,
@@ -293,8 +253,8 @@ func runEngineChild() int {
 			engine.Stop()
 			return 1
 		}
-		tunnel.T().SetDialer(perAppDialer)
-		activeDialer = perAppDialer
+		tunnel.T().SetDialer(perApp)
+		activeDialer = perApp
 	} else {
 		trackedProxy, err := mactun.NewTrackedProxyDialer(cfg.Proxy)
 		if err != nil {
@@ -306,7 +266,16 @@ func runEngineChild() int {
 		activeDialer = trackedProxy
 	}
 	defer activeDialer.Close()
+	responseEncoder := json.NewEncoder(responseFile)
+	if err := responseEncoder.Encode(mactun.EngineControlResponse{Action: "ready"}); err != nil {
+		fmt.Fprintf(os.Stderr, "engine: send startup response: %v\n", err)
+		engine.Stop()
+		return 1
+	}
 
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, os.Interrupt)
+	defer signal.Stop(stopCh)
 	commandCh := make(chan mactun.EngineControlCommand)
 	controlErrCh := make(chan error, 1)
 	go func() {
@@ -320,20 +289,16 @@ func runEngineChild() int {
 			commandCh <- command
 		}
 	}()
-	responseEncoder := json.NewEncoder(responseFile)
 	for {
 		select {
 		case <-stopCh:
 			engine.Stop()
 			return 0
 		case command := <-commandCh:
-			response := mactun.EngineControlResponse{
-				Action: command.Action, Generation: command.Generation,
-			}
-			switch {
-			case !command.IsNetworkRebind():
+			response := mactun.EngineControlResponse{Action: command.Action, Generation: command.Generation}
+			if !command.IsNetworkRebind() {
 				response.Error = "unsupported engine control action"
-			default:
+			} else {
 				closed, err := activeDialer.RebindNetwork(command.Source4)
 				response.Closed = closed
 				if err != nil {
@@ -346,9 +311,11 @@ func runEngineChild() int {
 				return 1
 			}
 		case err := <-controlErrCh:
-			fmt.Fprintf(os.Stderr, "engine: control channel failed: %v\n", err)
+			if !errors.Is(err, io.EOF) {
+				fmt.Fprintf(os.Stderr, "engine: control channel failed: %v\n", err)
+			}
 			engine.Stop()
-			return 1
+			return 0
 		}
 	}
 }

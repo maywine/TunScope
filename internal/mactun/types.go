@@ -25,7 +25,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Device:     "utun123",
+		Device:     defaultDeviceName(),
 		MTU:        1500,
 		LogLevel:   "info",
 		AutoBypass: false,
@@ -102,12 +102,14 @@ type State struct {
 	OwnerToken      string                 `json:"ownerToken,omitempty"`
 	OwnerStartedAt  time.Time              `json:"ownerStartedAt,omitempty"`
 	OwnerCommand    string                 `json:"ownerCommand,omitempty"`
+	StopEvent       string                 `json:"stopEvent,omitempty"`
 	EnginePID       int                    `json:"enginePid,omitempty"`
 	EngineStartedAt time.Time              `json:"engineStartedAt,omitempty"`
 	EngineCommand   string                 `json:"engineCommand,omitempty"`
 	StartedAt       time.Time              `json:"startedAt"`
 	Proxy           string                 `json:"proxy"`
 	Device          string                 `json:"device"`
+	DeviceIndex     int                    `json:"deviceIndex,omitempty"`
 	Interface       string                 `json:"interface"`
 	Interface6      string                 `json:"interface6,omitempty"`
 	PhysicalIPv4    []string               `json:"physicalIPv4,omitempty"`

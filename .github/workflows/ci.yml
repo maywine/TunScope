@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: make build
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: New-Item -ItemType Directory -Force bin | Out-Null
+      - run: go build -trimpath -o bin/mactun-windows-amd64.exe ./cmd/mactun

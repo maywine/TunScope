@@ -1,10 +1,11 @@
+//go:build darwin
+
 package mactun
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -17,28 +18,6 @@ import (
 	"syscall"
 	"time"
 )
-
-var ipv4TunNetworks = []string{
-	"1.0.0.0/8",
-	"2.0.0.0/7",
-	"4.0.0.0/6",
-	"8.0.0.0/5",
-	"16.0.0.0/4",
-	"32.0.0.0/3",
-	"64.0.0.0/2",
-	"128.0.0.0/1",
-	"198.18.0.0/15",
-}
-
-type App struct {
-	runner commandRunner
-	out    io.Writer
-	errOut io.Writer
-}
-
-func New(out, errOut io.Writer) *App {
-	return &App{runner: execRunner{}, out: out, errOut: errOut}
-}
 
 func (a *App) Up(cfg Config) (returnErr error) {
 	return a.up(cfg, false, nil, nil)

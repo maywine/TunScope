@@ -1,6 +1,6 @@
 # MacTun
 
-MacTun 是仅在本机运行的轻量 macOS TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5。它不使用 Network Extension，因此不需要付费 Apple Developer Program，也不需要上架 App Store。
+MacTun 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5。当前提供完整的 macOS 应用/命令行版本，以及 Windows 10/11 x64 命令行版本。
 
 ## macOS 应用
 
@@ -21,6 +21,18 @@ open macos/MacTun.xcodeproj
 ```
 
 需要 macOS 13+、完整 Xcode 16+ 和系统 Go 1.23.1+。免费 Personal Team 或本机 ad-hoc 签名均可。
+
+## Windows 命令行版本
+
+Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。它支持全局模式和按应用模式，并沿用 MacTun 的状态恢复、精确路由清理与 SOCKS5 TCP/UDP 探测。
+
+```powershell
+.\mactun.exe up `
+  --proxy socks5://127.0.0.1:7890 `
+  --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
+Windows 10/11 x64 CLI 的构建、官方 `wintun.dll` 安装、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。当前 Windows 阶段不包含 GUI 或 Windows Service；同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新运行 `up`。
 
 ## 搭配 dnscrypt-proxy
 
@@ -120,7 +132,7 @@ timeout 2
 
 完整安装和服务管理步骤参见 dnscrypt-proxy 的 [macOS 官方说明](https://github.com/DNSCrypt/dnscrypt-proxy/wiki/Installation-macOS)。
 
-## 命令行版本
+## macOS 命令行版本
 
 命令行工具既支持按应用模式，也保留全局 TUN 模式。
 
@@ -230,7 +242,7 @@ sudo mactun up -p socks5://127.0.0.1:7890 --interface en0 --gateway 192.168.1.1 
 - 修改路由和创建 `utun` 必须使用 `sudo`；`doctor` 和 `status` 不需要修改系统。
 - 如果把密码直接写进 `--proxy`，当前 `mactun` 父进程的命令行仍可能被本机进程检查工具看到；本地监听端口建议不设认证，或确保机器账户本身可信。
 - 按应用模式会自动探测本地代理程序当前连接的真实远端节点并添加绕行路由，防止代理自身再次进入 TUN。全局模式仍须用 `--bypass` 指定真实代理节点。
-- 自动网络模式检测到物理主 IPv4 地址被 DHCP 或漫游替换时，会先移除 TUN 路由并完整重建 engine，避免旧 scoped route 与 UDP flow 继续使用已删除的源地址。
+- 自动网络模式检测到物理主 IPv4 地址被 DHCP 或漫游替换时，会原位刷新物理路由、发布新的源地址并关闭旧 egress flow，让应用重连，同时保持 TUN 捕获路由有效。
 - 当前实现以未选应用可用性优先：极少数无法确认归属的流会保持直连，自动重建数据面时也存在短暂直连窗口。因此它不是严格防泄漏的 Apple Per-App VPN；需要强制 fail-closed 的场景应使用具备相应 entitlement/管理能力的 Network Extension。
 - 局域网已有的更精确路由会保持直连。按应用模式启用 trusted DNS 时，进入 TUN 的 53 端口 DNS 会经 SOCKS5 转发；未启用时，本地解析器留在 loopback，外部解析器保持物理直连，以免未选应用受影响，但存在 DNS 泄漏的取舍。全局模式会为外部系统 DNS 添加主机路由，并通过 SOCKS5 转发。
 - `SIGKILL` 或断电无法执行即时清理；下一次 `sudo mactun up` 会清理残留，或手动运行 `sudo mactun down`。
@@ -242,6 +254,7 @@ sudo mactun up -p socks5://127.0.0.1:7890 --interface en0 --gateway 192.168.1.1 
 ```bash
 make test
 make build
+make windows-amd64
 ```
 
 建议启用后分别检查 IPv4、IPv6 和 DNS 出口，并确认本地代理工具的日志中可以看到 UDP 流量。
