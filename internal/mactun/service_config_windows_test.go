@@ -91,8 +91,12 @@ func TestSaveAndLoadWindowsServiceConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(loaded, cfg) {
-		t.Fatalf("loaded config = %#v, want %#v", loaded, cfg)
+	want, err := NormalizeWindowsServiceConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("loaded config = %#v, want %#v", loaded, want)
 	}
 	descriptor, err := windows.GetNamedSecurityInfo(
 		WindowsServiceConfigPath(),
