@@ -9,7 +9,34 @@ Windows 版本提供与 macOS helper 对应的命令行数据面，第一阶段�
 - 本地 SOCKS5 服务，例如 `socks5://127.0.0.1:7890`。
 - 官方签名的 `wintun.dll` AMD64 版本。
 
-Wintun 官方只支持随应用分发从 [wintun.net](https://www.wintun.net/) 下载的已签名 DLL。下载 ZIP 后，把其中 `bin\amd64\wintun.dll` 放到 `mactun.exe` 同一目录；不要自行编译并分发名为 Wintun 的驱动文件。
+## 下载与安装
+
+标签发布会在 [GitHub Releases](https://github.com/maywine/MacTun/releases) 生成 `mactun-<版本>-windows-amd64.zip` 和对应的 `.sha256`。压缩包已经包含经官方归档 SHA-256 校验取得的 AMD64 `wintun.dll`、Wintun 许可证、示例配置和安装脚本。
+
+下载后先核对压缩包：
+
+```powershell
+$archive = '.\mactun-0.3.12-windows-amd64.zip'
+$expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'MacTun package checksum mismatch' }
+Expand-Archive $archive -DestinationPath .
+```
+
+可以直接在解压目录以便携方式运行。也可以打开管理员 PowerShell，把文件安装到 `%ProgramFiles%\MacTun`，并选择加入系统 PATH：
+
+```powershell
+Set-Location .\mactun-0.3.12-windows-amd64
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
+```
+
+安装脚本只复制发布包中的固定文件，并可选更新机器 PATH；它不会启动、停止或重启 MacTun。更新一个正在运行的安装时会拒绝覆盖，请先手动执行已安装路径中的 `mactun.exe down`。安装后需要新开终端才能使用更新后的 PATH。
+
+当前项目没有 Windows 代码签名证书，因此 `mactun.exe` 和 PowerShell 脚本本身未签名，首次下载时可能出现 SmartScreen 提示；包内的 `wintun.dll` 来自 Wintun 官方签名发行包。校验 `.sha256` 只能检测下载损坏或与 GitHub 发布资产不一致，不能替代代码签名。
+
+## Wintun
+
+Wintun 官方支持随应用分发从 [wintun.net](https://www.wintun.net/) 下载的已签名 DLL。手工构建时，下载 ZIP 后把其中 `bin\amd64\wintun.dll` 放到 `mactun.exe` 同一目录；不要自行编译并分发名为 Wintun 的驱动文件。
 
 目录应类似：
 
@@ -25,14 +52,14 @@ MacTun\
 .\windows\prepare-wintun.ps1 -Destination .\bin
 ```
 
-脚本只下载 Wintun 官方当前发布的 0.14.1 ZIP，并核对官网公布的 SHA-256；项目本身不把第三方二进制提交到 Git。
+脚本只下载 Wintun 官方当前发布的 0.14.1 ZIP，核对官网公布的 SHA-256，并同时复制 `WINTUN-LICENSE.txt`；项目本身不把第三方二进制提交到 Git。
 
 ## 构建
 
 在 macOS 或 Linux 的仓库根目录执行：
 
 ```bash
-make windows-amd64
+make windows-amd64 VERSION=0.3.12
 ```
 
 产物是 `bin/mactun-windows-amd64.exe`，复制到 Windows 后可以重命名为 `mactun.exe`。也可以直接执行：
@@ -43,6 +70,17 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 ```
 
 在 Windows 上可使用 PowerShell 的环境变量语法，或直接运行 `go build -o mactun.exe ./cmd/mactun`。
+
+在 Windows 上生成与 GitHub Release 相同结构的便携包：
+
+```powershell
+go build -trimpath -ldflags "-s -w" -o .\bin\mactun.exe .\cmd\mactun
+.\windows\package.ps1 -Binary .\bin\mactun.exe -Destination .\dist
+```
+
+`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.12`。它会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
+
+维护者推送形如 `v0.3.13` 或 `v0.3.13-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
 
 ## 快速开始
 
@@ -82,10 +120,10 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 
 ## JSON 配置
 
-示例见 [mactun.example.json](mactun.example.json)：
+示例见 [mactun.example.json](mactun.example.json)。在发布包目录中执行：
 
 ```powershell
-.\mactun.exe up --config .\windows\mactun.example.json
+.\mactun.exe up --config .\mactun.example.json
 ```
 
 应用路径必须是绝对路径。JSON 中的反斜杠必须写成 `\\`。
@@ -118,7 +156,7 @@ loopback DNS 不会被 MacTun 错误地改成物理网关路由。停止 `dnscry
 
 ## 当前限制
 
-- 当前发布目标是 Windows x64 CLI；ARM64、GUI、Windows Service 和自动提权安装器尚未完成。
+- 当前发布目标是 Windows x64 CLI；ARM64、GUI、Windows Service、自动提权和 Microsoft Authenticode 代码签名尚未完成。
 - 按应用识别使用 Windows IP Helper TCP/UDP owner-PID 表。非常短暂、尚未出现在系统表中的流量会优先保持直连，以免影响名单外应用；确认属于引擎自身或存在冲突的流量会阻断。
 - Windows 共享 DNS 服务无法提供严格的逐应用 DNS 归属。需要稳定、防污染的解析时使用本地 `dnscrypt-proxy`，不要把共享系统 DNS 全部假定为某个名单内应用。
 - 只有同一物理网卡上的地址/网关切换能够原位交接；切换到另一块网卡需要重新运行 `up`。

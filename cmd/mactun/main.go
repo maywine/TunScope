@@ -23,8 +23,6 @@ import (
 	"github.com/maywine/MacTun/internal/mactun"
 )
 
-const version = "0.3.12"
-
 type stringList []string
 
 func (s *stringList) String() string { return strings.Join(*s, ",") }

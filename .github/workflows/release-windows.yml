@@ -1,0 +1,106 @@
+name: Release Windows CLI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $tagMatch = [regex]::Match(
+            $env:GITHUB_REF_NAME,
+            '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)$'
+          )
+          if (-not $tagMatch.Success) {
+            throw "Release tag must look like v0.3.12 or v0.3.12-rc.1: $env:GITHUB_REF_NAME"
+          }
+          $version = $tagMatch.Groups['version'].Value
+          "MACTUN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build versioned Windows binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          go build `
+            -trimpath `
+            -ldflags "-s -w -X main.version=$env:MACTUN_VERSION" `
+            -o bin/mactun-windows-amd64.exe `
+            ./cmd/mactun
+
+          $actual = (& .\bin\mactun-windows-amd64.exe version | Out-String).Trim()
+          $expected = "mactun $env:MACTUN_VERSION"
+          if ($actual -ne $expected) {
+            throw "Version injection failed: expected '$expected', got '$actual'"
+          }
+      - name: Create signed-driver Windows package
+        shell: pwsh
+        run: |
+          .\windows\package.ps1 `
+            -Binary .\bin\mactun-windows-amd64.exe `
+            -Version $env:MACTUN_VERSION `
+            -Destination .\dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mactun-${{ github.ref_name }}-windows-amd64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+      - name: Create or update GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath .\dist -File | ForEach-Object { $_.FullName })
+          if ($assets.Count -ne 2) {
+            throw "Expected archive and checksum assets, found $($assets.Count)"
+          }
+
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $uploadArguments = @(
+              'release',
+              'upload',
+              $env:GITHUB_REF_NAME
+            ) + $assets + @(
+              '--repo',
+              $env:GITHUB_REPOSITORY,
+              '--clobber'
+            )
+            & gh @uploadArguments
+            exit $LASTEXITCODE
+          }
+
+          $arguments = @(
+            'release',
+            'create',
+            $env:GITHUB_REF_NAME
+          ) + $assets + @(
+            '--repo',
+            $env:GITHUB_REPOSITORY,
+            '--title',
+            "MacTun $env:GITHUB_REF_NAME",
+            '--generate-notes',
+            '--verify-tag'
+          )
+          if ($env:MACTUN_VERSION.Contains('-')) {
+            $arguments += '--prerelease'
+          }
+          & gh @arguments
+          exit $LASTEXITCODE

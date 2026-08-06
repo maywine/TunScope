@@ -32,7 +32,7 @@ Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
-Windows 10/11 x64 CLI 的构建、官方 `wintun.dll` 安装、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。当前 Windows 阶段不包含 GUI 或 Windows Service；同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新运行 `up`。
+Windows 10/11 x64 CLI 可从 [GitHub Releases](https://github.com/maywine/MacTun/releases) 获取带 SHA-256 的便携包；包内包含经官方归档校验取得的签名 `wintun.dll` 和一个不会自动启停 MacTun 的安装脚本。构建、安装、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。当前 Windows 阶段不包含 GUI 或 Windows Service；同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新运行 `up`。
 
 ## 搭配 dnscrypt-proxy
 

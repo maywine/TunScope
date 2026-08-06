@@ -23,10 +23,17 @@ try {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "The official archive does not contain bin\amd64\wintun.dll"
     }
+    $licenseSource = Join-Path $extractPath 'wintun\LICENSE.txt'
+    if (-not (Test-Path -LiteralPath $licenseSource -PathType Leaf)) {
+        throw "The official archive does not contain LICENSE.txt"
+    }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     $target = Join-Path $Destination 'wintun.dll'
+    $licenseTarget = Join-Path $Destination 'WINTUN-LICENSE.txt'
     Copy-Item -LiteralPath $source -Destination $target -Force
+    Copy-Item -LiteralPath $licenseSource -Destination $licenseTarget -Force
     Write-Host "Installed official Wintun $version AMD64 DLL at $target"
+    Write-Host "Installed the Wintun license at $licenseTarget"
 }
 finally {
     if (Test-Path -LiteralPath $temporaryRoot) {

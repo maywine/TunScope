@@ -31,4 +31,64 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
       - run: New-Item -ItemType Directory -Force bin | Out-Null
-      - run: go build -trimpath -o bin/mactun-windows-amd64.exe ./cmd/mactun
+      - run: go build -trimpath -ldflags "-s -w" -o bin/mactun-windows-amd64.exe ./cmd/mactun
+      - name: Verify Windows binary version
+        shell: pwsh
+        run: |
+          $actual = (& .\bin\mactun-windows-amd64.exe version | Out-String).Trim()
+          if ($actual -ne 'mactun 0.3.12') {
+            throw "Unexpected version output: $actual"
+          }
+      - name: Build and inspect Windows package
+        shell: pwsh
+        run: |
+          .\windows\package.ps1 `
+            -Binary .\bin\mactun-windows-amd64.exe `
+            -Destination .\dist
+
+          $archives = @(Get-ChildItem -LiteralPath .\dist -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) {
+            throw "Expected one Windows archive, found $($archives.Count)"
+          }
+          $archive = $archives[0]
+          $checksumPath = "$($archive.FullName).sha256"
+          $expected = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0]
+          $actual = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Package checksum mismatch: expected $expected, got $actual"
+          }
+
+          $extractPath = Join-Path $env:RUNNER_TEMP 'mactun-package-check'
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $extractPath
+          $packageRoot = @(Get-ChildItem -LiteralPath $extractPath -Directory)
+          if ($packageRoot.Count -ne 1) {
+            throw "Expected one package root, found $($packageRoot.Count)"
+          }
+          $required = @(
+            'mactun.exe',
+            'wintun.dll',
+            'README.md',
+            'LICENSE.txt',
+            'WINTUN-LICENSE.txt',
+            'mactun.example.json',
+            'prepare-wintun.ps1',
+            'install.ps1'
+          )
+          foreach ($name in $required) {
+            $path = Join-Path $packageRoot[0].FullName $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Package is missing $name"
+            }
+          }
+          & (Join-Path $packageRoot[0].FullName 'install.ps1') `
+            -SourceDirectory $packageRoot[0].FullName `
+            -InstallDirectory (Join-Path $env:RUNNER_TEMP 'MacTun-install-check') `
+            -WhatIf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mactun-windows-amd64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
