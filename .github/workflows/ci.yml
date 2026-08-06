@@ -38,7 +38,7 @@ jobs:
           $testExit = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
           if ($testExit -ne 0) {
-            $details = (($output | Select-Object -Last 80) -join "`n")
+            $details = (($output | Select-Object -Last 25) -join "`n")
             $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Host "::error title=Windows Go tests failed::$details"
             exit $testExit
