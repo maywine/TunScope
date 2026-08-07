@@ -680,10 +680,14 @@ type liveNetworkMonitor struct {
 	proxyPort           int
 	peerPollCount       int
 	routeUnavailable    bool
-	routeUnavailableAt  time.Time
+	routeUnavailableFor time.Duration
+	routeSampledAt      time.Time
+	routeSampleFullWake bool
+	routeTimeoutPaused  bool
 	recoveryPending     bool
 	dnsUnavailable      bool
 	now                 func() time.Time
+	fullWake            func() bool
 	routeObservation    stableObservation
 	addressObservation  stableObservation
 	recoveryObservation stableObservation
@@ -711,6 +715,7 @@ func newLiveNetworkMonitor(
 		discoverPeers: discoverPeers,
 		proxyPort:     proxyPort,
 		now:           time.Now,
+		fullWake:      systemIsFullWake,
 		routeObservation: newStableObservation(
 			networkStableSampleCount,
 			observationSignature(route.signature(), nil),
@@ -729,6 +734,31 @@ func newLiveNetworkMonitor(
 			observationSignature(stringSetSignature(autoPeers), nil),
 		),
 	}
+}
+
+// accountUnavailableTime advances the fail-safe timeout only while two
+// consecutive samples both report a full, display-capable wake. Capping a
+// single accounting step prevents a suspended process from charging an entire
+// sleep interval when its ticker resumes after wake.
+func (m *liveNetworkMonitor) accountUnavailableTime(now time.Time, fullWake bool) {
+	if !m.routeSampledAt.IsZero() && m.routeSampleFullWake && fullWake {
+		elapsed := now.Sub(m.routeSampledAt)
+		if elapsed > networkPollInterval {
+			elapsed = networkPollInterval
+		}
+		if elapsed > 0 {
+			m.routeUnavailableFor += elapsed
+		}
+	}
+	m.routeSampledAt = now
+	m.routeSampleFullWake = fullWake
+}
+
+func (m *liveNetworkMonitor) resetUnavailableTime() {
+	m.routeUnavailableFor = 0
+	m.routeSampledAt = time.Time{}
+	m.routeSampleFullWake = false
+	m.routeTimeoutPaused = false
 }
 
 func (m *liveNetworkMonitor) currentBypasses() ([]netip.Prefix, error) {
@@ -754,18 +784,40 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			m.routeObservation.resetCandidate()
 			m.recoveryObservation.commit("")
 			now := m.now()
+			fullWake := true
+			if m.fullWake != nil {
+				fullWake = m.fullWake()
+			}
 			if !m.routeUnavailable {
-				m.routeUnavailableAt = now
+				m.resetUnavailableTime()
 				updates = append(updates, fmt.Sprintf(
 					"physical network temporarily unavailable; keeping TUN capture active while waiting: %v",
 					unavailable,
 				))
+				if !fullWake {
+					updates = append(updates, "system sleep or dark wake detected; pausing the physical-network timeout")
+				}
+			} else if m.routeTimeoutPaused != !fullWake {
+				if fullWake {
+					remaining := networkUnavailableGrace - m.routeUnavailableFor
+					if remaining < 0 {
+						remaining = 0
+					}
+					updates = append(updates, fmt.Sprintf(
+						"full wake detected; resuming the physical-network timeout with %s remaining",
+						remaining.Round(time.Millisecond),
+					))
+				} else {
+					updates = append(updates, "system sleep or dark wake detected; pausing the physical-network timeout")
+				}
 			}
+			m.accountUnavailableTime(now, fullWake)
+			m.routeTimeoutPaused = !fullWake
 			m.routeUnavailable = true
 			m.recoveryPending = true
-			if !m.routeUnavailableAt.IsZero() && now.Sub(m.routeUnavailableAt) >= networkUnavailableGrace {
+			if m.routeUnavailableFor >= networkUnavailableGrace {
 				return updates, fmt.Errorf(
-					"physical network remained unavailable for %s: %w",
+					"physical network remained unavailable for %s of full-wake time: %w",
 					networkUnavailableGrace,
 					unavailable,
 				)
@@ -774,7 +826,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		}
 	} else if m.routeUnavailable {
 		m.routeUnavailable = false
-		m.routeUnavailableAt = time.Time{}
+		m.resetUnavailableTime()
 		updates = append(updates, "physical network is available again; validating the replacement route")
 	}
 	if routeErr == nil && m.recoveryPending {

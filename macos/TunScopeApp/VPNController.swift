@@ -32,7 +32,12 @@ final class TunController: ObservableObject {
 
     private let logDirectory = "/Library/Logs/TunScope"
     private let logPath = "/Library/Logs/TunScope/tunscope.log"
-    private let previousLogPath = "/Library/Logs/TunScope/tunscope.previous.log"
+    private let legacyPreviousLogPath = "/Library/Logs/TunScope/tunscope.previous.log"
+    private let retainedLogCount = 5
+
+    private var rotatedLogPaths: [String] {
+        (1...retainedLogCount).map { "\(logDirectory)/tunscope.\($0).log" }
+    }
 
     init() {
         loadSettings()
@@ -128,37 +133,16 @@ final class TunController: ObservableObject {
                 configURL = try writeTemporaryConfig()
                 guard let configURL else { throw ControllerError.configurationWriteFailed }
                 let logOwner = "\(getuid()):\(getgid())"
-                let command = [
-                    "/bin/mkdir", "-p", shellQuote(logDirectory),
-                    "&&", "/bin/test", "!", "-L", shellQuote(logDirectory),
-                    "&&", "/bin/chmod", "0700", shellQuote(logDirectory),
-                    "&&", "/usr/sbin/chown", "0:0", shellQuote(logDirectory),
-                    "&&", "/bin/chmod", "-N", shellQuote(logDirectory),
-                    "&&", "/bin/test", "!", "-L", shellQuote(logPath),
-                    "&&", "(", "/bin/test", "!", "-e", shellQuote(logPath),
-                    "||", "/bin/test", "-f", shellQuote(logPath), ")",
-                    "&&", "/bin/test", "!", "-L", shellQuote(previousLogPath),
-                    "&&", "(", "/bin/test", "!", "-e", shellQuote(previousLogPath),
-                    "||", "/bin/test", "-f", shellQuote(previousLogPath), ")",
-                    "&&", "(", "/bin/test", "!", "-e", shellQuote(logPath),
-                    "||", "/bin/mv", "-f", shellQuote(logPath), shellQuote(previousLogPath), ")",
-                    "&&", "(", "/bin/test", "!", "-e", shellQuote(previousLogPath),
-                    "||", "(", "/usr/sbin/chown", logOwner, shellQuote(previousLogPath),
-                    "&&", "/bin/chmod", "-N", shellQuote(previousLogPath),
-                    "&&", "/bin/chmod", "0600", shellQuote(previousLogPath), ")", ")",
-                    "&&", "/usr/bin/touch", shellQuote(logPath),
-                    "&&", "/usr/sbin/chown", logOwner, shellQuote(logPath),
-                    "&&", "/bin/chmod", "-N", shellQuote(logPath),
-                    "&&", "/bin/chmod", "0600", shellQuote(logPath),
-                    "&&", "/bin/chmod", "0755", shellQuote(logDirectory),
-                    "&&", "umask", "077",
-                    "&&",
+                var commandParts = logPreparationCommand(logOwner: logOwner)
+                commandParts += [
+                    "&&", "umask", "077", "&&",
                     shellQuote(try helperURL().path),
                     "__launch-up",
                     "--config", shellQuote(configURL.path),
                     "--delete-config",
                     ">", shellQuote(logPath), "2>&1", "</dev/null"
-                ].joined(separator: " ")
+                ]
+                let command = commandParts.joined(separator: " ")
                 try await runPrivilegedShell(command)
 
                 for _ in 0..<24 {
@@ -300,6 +284,70 @@ final class TunController: ObservableObject {
         "\"" + value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    private func logPreparationCommand(logOwner: String) -> [String] {
+        var command = [
+            "/bin/mkdir", "-p", shellQuote(logDirectory),
+            "&&", "/bin/test", "!", "-L", shellQuote(logDirectory),
+            "&&", "/bin/chmod", "0700", shellQuote(logDirectory),
+            "&&", "/usr/sbin/chown", "0:0", shellQuote(logDirectory),
+            "&&", "/bin/chmod", "-N", shellQuote(logDirectory)
+        ]
+
+        let managedLogPaths = [logPath, legacyPreviousLogPath] + rotatedLogPaths
+        for path in managedLogPaths {
+            command += [
+                "&&", "/bin/test", "!", "-L", shellQuote(path),
+                "&&", "(", "/bin/test", "!", "-e", shellQuote(path),
+                "||", "/bin/test", "-f", shellQuote(path), ")"
+            ]
+        }
+
+        guard let newestRotatedLog = rotatedLogPaths.first else { return command }
+
+        // Preserve the single log retained by older releases. On the first
+        // upgraded start it becomes rotation 2 after the current log is moved
+        // into rotation 1 below.
+        command += [
+            "&&", "(", "/bin/test", "!", "-e", shellQuote(legacyPreviousLogPath),
+            "||", "/bin/test", "-e", shellQuote(newestRotatedLog),
+            "||", "/bin/mv", shellQuote(legacyPreviousLogPath), shellQuote(newestRotatedLog), ")"
+        ]
+
+        if rotatedLogPaths.count > 1 {
+            for index in stride(from: rotatedLogPaths.count - 1, through: 1, by: -1) {
+                let source = rotatedLogPaths[index - 1]
+                let destination = rotatedLogPaths[index]
+                command += [
+                    "&&", "(", "/bin/test", "!", "-e", shellQuote(source),
+                    "||", "/bin/mv", "-f", shellQuote(source), shellQuote(destination), ")"
+                ]
+            }
+        }
+
+        command += [
+            "&&", "(", "/bin/test", "!", "-e", shellQuote(logPath),
+            "||", "/bin/mv", "-f", shellQuote(logPath), shellQuote(newestRotatedLog), ")"
+        ]
+
+        for path in rotatedLogPaths + [legacyPreviousLogPath] {
+            command += [
+                "&&", "(", "/bin/test", "!", "-e", shellQuote(path),
+                "||", "(", "/usr/sbin/chown", logOwner, shellQuote(path),
+                "&&", "/bin/chmod", "-N", shellQuote(path),
+                "&&", "/bin/chmod", "0600", shellQuote(path), ")", ")"
+            ]
+        }
+
+        command += [
+            "&&", "/usr/bin/touch", shellQuote(logPath),
+            "&&", "/usr/sbin/chown", logOwner, shellQuote(logPath),
+            "&&", "/bin/chmod", "-N", shellQuote(logPath),
+            "&&", "/bin/chmod", "0600", shellQuote(logPath),
+            "&&", "/bin/chmod", "0755", shellQuote(logDirectory)
+        ]
+        return command
     }
 
     private func readRecentLog() -> String {

@@ -536,6 +536,7 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 	}
 	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
 	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+	monitor.fullWake = func() bool { return true }
 
 	for i := 0; i < 3*networkStableSampleCount; i++ {
 		updates, err := monitor.poll(app, state, cfg)
@@ -586,19 +587,103 @@ func TestMonitorStopsAfterPhysicalNetworkUnavailableGrace(t *testing.T) {
 	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
 	now := time.Unix(1_700_000_000, 0)
 	monitor.now = func() time.Time { return now }
+	monitor.fullWake = func() bool { return true }
 
 	if _, err := monitor.poll(app, state, cfg); err != nil {
 		t.Fatalf("first unavailable sample stopped TUN: %v", err)
 	}
-	now = now.Add(networkUnavailableGrace - time.Millisecond)
-	if _, err := monitor.poll(app, state, cfg); err != nil {
-		t.Fatalf("sample inside unavailable grace stopped TUN: %v", err)
+	for monitor.routeUnavailableFor+networkPollInterval < networkUnavailableGrace {
+		now = now.Add(networkPollInterval)
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("sample inside unavailable grace stopped TUN at %s: %v", monitor.routeUnavailableFor, err)
+		}
 	}
-	now = now.Add(time.Millisecond)
+	now = now.Add(networkPollInterval)
 	_, err := monitor.poll(app, state, cfg)
 	var change *physicalNetworkChangeError
 	if err == nil || errors.As(err, &change) || !strings.Contains(err.Error(), "remained unavailable") {
 		t.Fatalf("expired unavailable grace error = %v", err)
+	}
+}
+
+func TestMonitorPausesUnavailableGraceDuringSleepAndDarkWake(t *testing.T) {
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	runner := &liveMonitorRunner{routeOutput: "route to: default\n"}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	fullWake := false
+	monitor.now = func() time.Time { return now }
+	monitor.fullWake = func() bool { return fullWake }
+
+	updates, err := monitor.poll(app, state, cfg)
+	if err != nil {
+		t.Fatalf("first dark-wake sample stopped TUN: %v", err)
+	}
+	if len(updates) != 2 || !strings.Contains(updates[1], "pausing") {
+		t.Fatalf("dark-wake updates = %#v", updates)
+	}
+	for i := 0; i < 10; i++ {
+		now = now.Add(networkUnavailableGrace)
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("dark-wake sample %d charged the unavailable timeout: %v", i, err)
+		}
+	}
+	if monitor.routeUnavailableFor != 0 {
+		t.Fatalf("dark wake accumulated unavailable time: %s", monitor.routeUnavailableFor)
+	}
+
+	fullWake = true
+	now = now.Add(networkPollInterval)
+	updates, err = monitor.poll(app, state, cfg)
+	if err != nil {
+		t.Fatalf("first full-wake sample stopped TUN: %v", err)
+	}
+	if len(updates) != 1 || !strings.Contains(updates[0], "resuming") {
+		t.Fatalf("full-wake updates = %#v", updates)
+	}
+	if monitor.routeUnavailableFor != 0 {
+		t.Fatalf("sleep-to-wake interval was charged: %s", monitor.routeUnavailableFor)
+	}
+
+	for monitor.routeUnavailableFor+networkPollInterval < networkUnavailableGrace {
+		now = now.Add(networkPollInterval)
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("full-wake grace expired early at %s: %v", monitor.routeUnavailableFor, err)
+		}
+	}
+	now = now.Add(networkPollInterval)
+	if _, err := monitor.poll(app, state, cfg); err == nil || !strings.Contains(err.Error(), "full-wake time") {
+		t.Fatalf("full-wake grace did not expire: %v", err)
+	}
+}
+
+func TestMonitorDoesNotChargeAWholeSuspendedPollGap(t *testing.T) {
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	runner := &liveMonitorRunner{routeOutput: "route to: default\n"}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+	monitor.fullWake = func() bool { return true }
+
+	if _, err := monitor.poll(app, state, cfg); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(8 * time.Hour)
+	if _, err := monitor.poll(app, state, cfg); err != nil {
+		t.Fatalf("a suspended poll gap stopped TUN immediately: %v", err)
+	}
+	if monitor.routeUnavailableFor != networkPollInterval {
+		t.Fatalf("suspended gap charged %s, want one poll interval %s", monitor.routeUnavailableFor, networkPollInterval)
 	}
 }
 
