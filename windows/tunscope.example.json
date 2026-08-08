@@ -11,5 +11,5 @@
   "logLevel": "info",
   "autoBypass": false,
   "ipv6": true,
-  "trustedDNS": "8.8.8.8:53"
+  "trustedDNS": ""
 }

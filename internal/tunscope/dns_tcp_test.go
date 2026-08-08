@@ -190,6 +190,12 @@ func TestCheckTrustedDNS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigUsesSystemDNS(t *testing.T) {
+	if got := DefaultConfig().TrustedDNS; got != "" {
+		t.Fatalf("default trusted DNS = %q, want system DNS", got)
+	}
+}
+
 func TestParseTrustedDNS(t *testing.T) {
 	for _, test := range []struct {
 		input string

@@ -53,7 +53,7 @@
                 </Grid.ColumnDefinitions>
                 <Border x:Name="StatusBadge" Width="12" Height="44" CornerRadius="6" Background="#8A94A6" />
                 <StackPanel Grid.Column="2">
-                    <TextBlock x:Name="StatusText" Text="正在读取服务状态…" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="StatusText" Text="正在读取 TUN 状态…" FontSize="18" FontWeight="SemiBold" />
                     <TextBlock x:Name="StatusDetailText" Text="" Margin="0,4,0,0" Foreground="#667085" TextWrapping="Wrap" />
                 </StackPanel>
                 <Button Grid.Column="3" x:Name="RefreshButton" Content="刷新" Click="RefreshButton_Click" Margin="8,0,0,0" />
@@ -90,8 +90,8 @@
                         <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="SOCKS5 代理" />
                         <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="4" x:Name="ProxyTextBox" ToolTip="例如 socks5://127.0.0.1:7890" />
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="可信 DNS" />
-                        <TextBox Grid.Row="2" Grid.Column="1" x:Name="TrustedDnsTextBox" ToolTip="留空时保留系统 DNS 路径" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="可信 DNS（可选）" />
+                        <TextBox Grid.Row="2" Grid.Column="1" x:Name="TrustedDnsTextBox" ToolTip="留空使用 Windows 当前系统 DNS" />
                         <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource FieldLabel}" Text="Wintun 名称" />
                         <TextBox Grid.Row="2" Grid.Column="4" x:Name="DeviceTextBox" />
 
@@ -115,17 +115,13 @@
                         <CheckBox Grid.Row="8" Grid.Column="3" Grid.ColumnSpan="2" x:Name="AutoBypassCheckBox" Content="自动发现本地代理远端节点" VerticalAlignment="Center" />
 
                         <CheckBox Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="2" x:Name="TcpOnlyCheckBox" Content="TCP-only 兼容模式" VerticalAlignment="Center" />
-                        <StackPanel Grid.Row="10" Grid.Column="3" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="服务启动方式" VerticalAlignment="Center" Margin="0,0,12,0" />
-                            <ComboBox x:Name="StartupComboBox" Width="170" SelectedValuePath="Tag">
-                                <ComboBoxItem Content="手动（推荐）" Tag="manual" IsSelected="True" />
-                                <ComboBoxItem Content="自动（延迟启动）" Tag="automatic" />
-                            </ComboBox>
-                        </StackPanel>
+                        <TextBlock Grid.Row="10" Grid.Column="3" Grid.ColumnSpan="2"
+                                   Foreground="#596579" VerticalAlignment="Center"
+                                   Text="无需安装服务" />
 
                         <Border Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="5" Background="#F7F9FC" BorderBrush="#E3E8EF" BorderThickness="1" CornerRadius="6" Padding="12">
                             <TextBlock Foreground="#596579" TextWrapping="Wrap"
-                                       Text="服务以 LocalSystem 运行，但仍连接本机 SOCKS5。若代理只在用户登录后启动，请保持“手动”；只有代理本身也是系统服务时才使用自动启动。" />
+                                       Text="直接点击“启动”即可运行，无需执行 install.ps1。GUI 直接管理前台数据面；正常关闭窗口时会先安全停止 TUN 并恢复路由。" />
                         </Border>
                     </Grid>
                 </ScrollViewer>
@@ -162,7 +158,7 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <TextBlock Grid.Column="0" Text="代理节点绕行（每行一个域名、IP 或 CIDR）" />
-                    <TextBlock Grid.Column="2" Text="服务日志（自动刷新，最多显示末尾 128 KiB）" />
+                    <TextBlock Grid.Column="2" Text="运行日志（本地时间，按实际级别显示，最多末尾 128 KiB）" />
                     <TextBox Grid.Row="2" Grid.Column="0" x:Name="BypassTextBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Cascadia Mono, Consolas" />
                     <TextBox Grid.Row="2" Grid.Column="2" x:Name="LogTextBox" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Cascadia Mono, Consolas" Background="#10151D" Foreground="#DDE7F5" BorderThickness="0" />
                 </Grid>
@@ -175,10 +171,8 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <Button x:Name="InstallButton" Content="安装/更新服务" Click="InstallButton_Click" />
-                <Button x:Name="UninstallButton" Content="卸载服务" Click="UninstallButton_Click" />
-            </StackPanel>
+            <Button Grid.Column="0" x:Name="UninstallButton" Content="移除旧服务"
+                    Click="UninstallButton_Click" Visibility="Collapsed" />
             <TextBlock Grid.Column="1" x:Name="OperationText" VerticalAlignment="Center" Foreground="#667085" TextAlignment="Center" />
             <StackPanel Grid.Column="2" Orientation="Horizontal">
                 <Button x:Name="SaveButton" Content="保存配置" Click="SaveButton_Click" />

@@ -30,7 +30,6 @@ func DefaultConfig() Config {
 		LogLevel:   "info",
 		AutoBypass: false,
 		IPv6:       true,
-		TrustedDNS: "8.8.8.8:53",
 	}
 }
 

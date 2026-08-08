@@ -23,9 +23,16 @@ public partial class MainWindow : Window
 
     private readonly ObservableCollection<string> _applications = [];
     private readonly DispatcherTimer _refreshTimer;
+    private readonly object _portableLogLock = new();
+    private readonly StringBuilder _portableLog = new();
     private ServiceStatus? _lastStatus;
+    private Process? _portableProcess;
+    private Task? _portableStdoutTask;
+    private Task? _portableStderrTask;
     private bool _busy;
     private bool _refreshing;
+    private bool _closeInProgress;
+    private bool _allowClose;
 
     private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope.exe");
     private static string DefaultServiceDirectory => Path.Combine(
@@ -33,7 +40,6 @@ public partial class MainWindow : Window
         "TunScope",
         "service");
     private static string DefaultConfigPath => Path.Combine(DefaultServiceDirectory, "config.json");
-    private static string DefaultLogPath => Path.Combine(DefaultServiceDirectory, "service.log");
 
     public MainWindow()
     {
@@ -58,16 +64,59 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"读取服务配置失败：\n{ex.Message}", "TunScope", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, $"读取配置失败：\n{ex.Message}", "TunScope", MessageBoxButton.OK, MessageBoxImage.Warning);
             ApplyConfiguration(new TunScopeConfig());
         }
         await RefreshStatusAsync(force: true);
         _refreshTimer.Start();
     }
 
-    private void Window_Closing(object? sender, CancelEventArgs e)
+    private async void Window_Closing(object? sender, CancelEventArgs e)
     {
         _refreshTimer.Stop();
+        if (_allowClose)
+        {
+            await ReapPortableProcessAsync();
+            return;
+        }
+
+        var portableRuntime = _lastStatus?.Installed != true &&
+                              _lastStatus?.Runtime?.Status is "active" or "stale";
+        var ownsRunningProcess = _portableProcess is { HasExited: false };
+        if (!portableRuntime && !ownsRunningProcess)
+        {
+            await ReapPortableProcessAsync();
+            return;
+        }
+
+        e.Cancel = true;
+        if (_closeInProgress)
+        {
+            return;
+        }
+        _closeInProgress = true;
+        _busy = true;
+        OperationText.Text = "正在停止 TUN 并恢复路由…";
+        UpdateButtons();
+        try
+        {
+            await StopPortableCoreAsync();
+            _allowClose = true;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            _closeInProgress = false;
+            _busy = false;
+            _refreshTimer.Start();
+            UpdateButtons();
+            MessageBox.Show(
+                this,
+                $"关闭前无法安全停止 TUN：\n{ex.Message}\n\n窗口将保持打开，请重试“停止”。",
+                "TunScope",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private async Task LoadConfigurationAsync()
@@ -165,52 +214,18 @@ public partial class MainWindow : Window
         await LoadConfigurationAsync();
     }
 
-    private async Task InstallServiceCoreAsync()
-    {
-        var startup = StartupComboBox.SelectedValue?.ToString() ?? "manual";
-        await RunCliCheckedAsync(["service", "install", "--startup", startup]);
-    }
-
-    private async Task EnsureServiceInstalledAsync()
-    {
-        if (_lastStatus?.Installed == true)
-        {
-            return;
-        }
-        var answer = MessageBox.Show(
-            this,
-            "Windows Service 尚未安装。是否先安装服务？",
-            "TunScope",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes)
-        {
-            throw new OperationCanceledException("用户取消安装 Windows Service");
-        }
-        await InstallServiceCoreAsync();
-    }
-
-    private async void InstallButton_Click(object sender, RoutedEventArgs e)
-    {
-        await PerformOperationAsync("正在安装服务…", "Windows Service 已安装但未自动启动", async () =>
-        {
-            await SaveConfigurationCoreAsync();
-            await InstallServiceCoreAsync();
-        });
-    }
-
     private async void UninstallButton_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(
                 this,
-                "卸载服务会先安全停止 TUN 并恢复路由。配置和日志会保留。继续吗？",
+                "检测到旧版 Windows Service。移除它会先安全停止 TUN 并恢复路由，配置会保留。继续吗？",
                 "TunScope",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
             return;
         }
-        await PerformOperationAsync("正在停止并卸载服务…", "Windows Service 已卸载", async () =>
+        await PerformOperationAsync("正在移除旧版服务…", "旧版 Windows Service 已移除，可以直接使用", async () =>
         {
             await RunCliCheckedAsync(["service", "uninstall"]);
         });
@@ -218,16 +233,15 @@ public partial class MainWindow : Window
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        await PerformOperationAsync("正在保存配置…", "配置已安全保存；运行中的服务需重启后生效", SaveConfigurationCoreAsync);
+        await PerformOperationAsync("正在保存配置…", "配置已安全保存；运行中的 TUN 需重启后生效", SaveConfigurationCoreAsync);
     }
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        await PerformOperationAsync("正在启动服务和 TUN…", "TUN 已启动", async () =>
+        await PerformOperationAsync("正在启动便携 TUN…", "TUN 已启动；关闭 GUI 时会自动停止", async () =>
         {
             await SaveConfigurationCoreAsync();
-            await EnsureServiceInstalledAsync();
-            await RunCliCheckedAsync(["service", "start"]);
+            await StartPortableCoreAsync();
         });
     }
 
@@ -235,9 +249,9 @@ public partial class MainWindow : Window
     {
         await PerformOperationAsync("正在保存配置并重启…", "配置已生效，TUN 已重新启动", async () =>
         {
+            await StopPortableCoreAsync();
             await SaveConfigurationCoreAsync();
-            await EnsureServiceInstalledAsync();
-            await RunCliCheckedAsync(["service", "restart"]);
+            await StartPortableCoreAsync();
         });
     }
 
@@ -245,7 +259,7 @@ public partial class MainWindow : Window
     {
         await PerformOperationAsync("正在停止 TUN 并恢复路由…", "TUN 已停止，路由已恢复", async () =>
         {
-            await RunCliCheckedAsync(["service", "stop"]);
+            await StopPortableCoreAsync();
         });
     }
 
@@ -283,6 +297,200 @@ public partial class MainWindow : Window
         foreach (var application in selected)
         {
             _applications.Remove(application);
+        }
+    }
+
+    private async Task StartPortableCoreAsync()
+    {
+        var status = await QueryStatusAsync();
+        if (status.Installed)
+        {
+            throw new InvalidOperationException("检测到旧版 Windows Service。请先点击“移除旧服务”，再启动 TUN。");
+        }
+        if (status.Runtime?.Status == "active")
+        {
+            throw new InvalidOperationException("TunScope 已经在运行");
+        }
+        if (status.Runtime?.Status == "stale")
+        {
+            await RunCliCheckedAsync(["down"]);
+        }
+
+        await ReapPortableProcessAsync();
+        ClearPortableLog();
+        AppendPortableLog("正在启动便携 TUN 数据面…");
+
+        var configPath = status.ConfigPath ?? DefaultConfigPath;
+        var process = new Process
+        {
+            StartInfo = CreateCliStartInfo(["up", "--config", configPath])
+        };
+        if (!process.Start())
+        {
+            process.Dispose();
+            throw new InvalidOperationException("无法启动 tunscope.exe");
+        }
+        _portableProcess = process;
+        _portableStdoutTask = CapturePortableOutputAsync(process.StandardOutput, standardError: false);
+        _portableStderrTask = CapturePortableOutputAsync(process.StandardError, standardError: true);
+
+        var deadline = DateTime.UtcNow.AddSeconds(45);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (process.HasExited)
+            {
+                var exitCode = process.ExitCode;
+                await ReapPortableProcessAsync();
+                throw new InvalidOperationException(
+                    $"便携 TUN 启动失败，tunscope.exe 退出代码为 {exitCode}。\n\n{PortableLogExcerpt()}");
+            }
+
+            status = await QueryStatusAsync();
+            _lastStatus = status;
+            if (status.Runtime?.Status == "active")
+            {
+                AppendPortableLog("TUN 已激活。");
+                return;
+            }
+            await Task.Delay(250);
+        }
+
+        try
+        {
+            await StopPortableCoreAsync();
+        }
+        catch (Exception stopError)
+        {
+            throw new TimeoutException($"便携 TUN 在 45 秒内未完成启动，随后停止也失败：{stopError.Message}");
+        }
+        throw new TimeoutException("便携 TUN 在 45 秒内未完成启动，已安全停止");
+    }
+
+    private async Task StopPortableCoreAsync()
+    {
+        var result = await RunCliAsync(["down"]);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(result.ErrorText);
+        }
+        AppendPortableLog(result.Stdout);
+
+        var process = _portableProcess;
+        if (process is { HasExited: false })
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException("tunscope.exe 收到停止请求后 12 秒内仍未退出；窗口将保持打开以便重试");
+            }
+        }
+        await ReapPortableProcessAsync();
+    }
+
+    private async Task<ServiceStatus> QueryStatusAsync()
+    {
+        var result = await RunCliAsync(["service", "status", "--json"]);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(result.ErrorText);
+        }
+        return JsonSerializer.Deserialize<ServiceStatus>(result.Stdout, JsonOptions)
+               ?? throw new InvalidDataException("TUN 状态响应为空");
+    }
+
+    private async Task CapturePortableOutputAsync(StreamReader reader, bool standardError)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync() is { } line)
+            {
+                AppendPortableLog(PortableLogFormatter.Format(line, standardError));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            AppendPortableLog($"读取运行日志失败：{ex.Message}");
+        }
+    }
+
+    private async Task ReapPortableProcessAsync()
+    {
+        var process = _portableProcess;
+        if (process == null || !process.HasExited)
+        {
+            return;
+        }
+
+        var stdoutTask = _portableStdoutTask ?? Task.CompletedTask;
+        var stderrTask = _portableStderrTask ?? Task.CompletedTask;
+        await Task.WhenAll(stdoutTask, stderrTask);
+        var exitCode = process.ExitCode;
+        process.Dispose();
+        if (ReferenceEquals(_portableProcess, process))
+        {
+            _portableProcess = null;
+            _portableStdoutTask = null;
+            _portableStderrTask = null;
+        }
+        AppendPortableLog($"tunscope.exe 已退出（代码 {exitCode}）。");
+    }
+
+    private void ClearPortableLog()
+    {
+        lock (_portableLogLock)
+        {
+            _portableLog.Clear();
+        }
+    }
+
+    private void AppendPortableLog(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+        lock (_portableLogLock)
+        {
+            _portableLog.AppendLine(text.TrimEnd());
+            const int maximumCharacters = 128 * 1024;
+            if (_portableLog.Length > maximumCharacters)
+            {
+                _portableLog.Remove(0, _portableLog.Length - maximumCharacters);
+            }
+        }
+    }
+
+    private string ReadPortableLog(ServiceStatus status)
+    {
+        lock (_portableLogLock)
+        {
+            if (_portableLog.Length > 0)
+            {
+                return _portableLog.ToString();
+            }
+        }
+        if (status.Installed)
+        {
+            return "检测到旧版 Windows Service；移除后即可直接启动 TUN。";
+        }
+        if (status.Runtime?.Status == "active")
+        {
+            return "检测到已有便携 TUN 进程；本次 GUI 会话没有它的启动日志。";
+        }
+        return "便携 TUN 尚未启动。";
+    }
+
+    private string PortableLogExcerpt()
+    {
+        lock (_portableLogLock)
+        {
+            const int maximumCharacters = 4000;
+            var start = Math.Max(0, _portableLog.Length - maximumCharacters);
+            return _portableLog.ToString(start, _portableLog.Length - start).Trim();
         }
     }
 
@@ -326,25 +534,11 @@ public partial class MainWindow : Window
         _refreshing = true;
         try
         {
-            var result = await RunCliAsync(["service", "status", "--json"]);
-            if (result.ExitCode != 0)
-            {
-                SetStatus("无法读取服务状态", result.ErrorText, StatusKind.Error);
-                return;
-            }
-            _lastStatus = JsonSerializer.Deserialize<ServiceStatus>(result.Stdout, JsonOptions)
-                          ?? throw new InvalidDataException("服务状态响应为空");
+            await ReapPortableProcessAsync();
+            _lastStatus = await QueryStatusAsync();
             UpdateStatusDisplay(_lastStatus);
-            LogTextBox.Text = await ReadLogTailAsync(_lastStatus.LogPath ?? DefaultLogPath);
+            LogTextBox.Text = ReadPortableLog(_lastStatus);
             LogTextBox.ScrollToEnd();
-            if (_lastStatus.Startup?.StartsWith("automatic", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                StartupComboBox.SelectedValue = "automatic";
-            }
-            else if (_lastStatus.Installed)
-            {
-                StartupComboBox.SelectedValue = "manual";
-            }
         }
         catch (Exception ex)
         {
@@ -361,16 +555,23 @@ public partial class MainWindow : Window
     {
         var runtime = status.Runtime?.Status ?? "stopped";
         var title = status.Installed
-            ? $"服务：{TranslateState(status.State)} · TUN：{TranslateRuntime(runtime)}"
-            : "Windows Service 尚未安装";
+            ? "检测到旧版 Windows Service"
+            : $"TUN：{TranslateRuntime(runtime)}";
         var details = new List<string>
         {
-            status.ConfigReady ? "配置已就绪" : "配置尚未保存",
-            $"启动方式：{TranslateStartup(status.Startup)}"
+            status.ConfigReady ? "配置已就绪" : "配置尚未保存"
         };
-        if (status.ProcessId > 0)
+        if (status.Installed)
         {
-            details.Add($"服务 PID {status.ProcessId}");
+            details.Add("请先点击“移除旧服务”，再直接启动 TUN");
+        }
+        else
+        {
+            details.Add("无需安装服务");
+        }
+        if (status.Runtime?.OwnerPid > 0)
+        {
+            details.Add($"进程 PID {status.Runtime.OwnerPid}");
         }
         if (!string.IsNullOrWhiteSpace(status.Runtime?.Interface))
         {
@@ -385,9 +586,9 @@ public partial class MainWindow : Window
             details.Add($"配置错误：{status.ConfigError}");
         }
 
-        var kind = status.State == "running" && runtime == "active"
+        var kind = !status.Installed && runtime == "active"
             ? StatusKind.Success
-            : status.State is "starting" or "stopping" || runtime == "stale"
+            : status.Installed || runtime == "stale"
                 ? StatusKind.Warning
                 : StatusKind.Neutral;
         SetStatus(title, string.Join(" · ", details), kind);
@@ -409,17 +610,17 @@ public partial class MainWindow : Window
     private void UpdateButtons()
     {
         var cliReady = File.Exists(CliPath);
-        var installed = _lastStatus?.Installed == true;
-        var state = _lastStatus?.State ?? "not-installed";
-        var running = state is "running" or "starting" or "stopping";
+        var legacyServiceInstalled = _lastStatus?.Installed == true;
+        var runtime = _lastStatus?.Runtime?.Status ?? "stopped";
+        var running = runtime == "active" || _portableProcess is { HasExited: false };
 
         RefreshButton.IsEnabled = cliReady && !_busy;
         SaveButton.IsEnabled = cliReady && !_busy;
-        InstallButton.IsEnabled = cliReady && !_busy && !running;
-        UninstallButton.IsEnabled = cliReady && !_busy && installed;
-        StartButton.IsEnabled = cliReady && !_busy && (state is "stopped" or "not-installed");
-        RestartButton.IsEnabled = cliReady && !_busy && installed && state == "running";
-        StopButton.IsEnabled = cliReady && !_busy && installed && running;
+        UninstallButton.Visibility = legacyServiceInstalled ? Visibility.Visible : Visibility.Collapsed;
+        UninstallButton.IsEnabled = cliReady && !_busy && legacyServiceInstalled;
+        StartButton.IsEnabled = cliReady && !_busy && !legacyServiceInstalled && !running;
+        RestartButton.IsEnabled = cliReady && !_busy && !legacyServiceInstalled && running;
+        StopButton.IsEnabled = cliReady && !_busy && !legacyServiceInstalled && (running || runtime == "stale");
     }
 
     private async Task RunCliCheckedAsync(IReadOnlyList<string> arguments, string? standardInput = null)
@@ -437,23 +638,7 @@ public partial class MainWindow : Window
         {
             throw new FileNotFoundException("找不到 tunscope.exe", CliPath);
         }
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = CliPath,
-            WorkingDirectory = AppContext.BaseDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = standardInput != null,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        var startInfo = CreateCliStartInfo(arguments, standardInput != null);
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
@@ -483,65 +668,37 @@ public partial class MainWindow : Window
         return new CliResult(process.ExitCode, stdout, string.IsNullOrWhiteSpace(stderr) ? stdout : stderr);
     }
 
-    private static async Task<string> ReadLogTailAsync(string path)
+    private ProcessStartInfo CreateCliStartInfo(IReadOnlyList<string> arguments, bool redirectStandardInput = false)
     {
-        if (!File.Exists(path))
+        var startInfo = new ProcessStartInfo
         {
-            return "服务日志尚未生成。";
-        }
-        try
+            FileName = CliPath,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        if (redirectStandardInput)
         {
-            await using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                4096,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            const int maximumBytes = 128 * 1024;
-            var truncated = stream.Length > maximumBytes;
-            if (truncated)
-            {
-                stream.Seek(-maximumBytes, SeekOrigin.End);
-            }
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            if (truncated)
-            {
-                _ = await reader.ReadLineAsync();
-            }
-            var content = await reader.ReadToEndAsync();
-            return truncated ? "…（仅显示日志末尾）…\r\n" + content : content;
+            // Process.Start rejects StandardInputEncoding unless stdin is redirected.
+            startInfo.RedirectStandardInput = true;
+            startInfo.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         }
-        catch (Exception ex)
+        foreach (var argument in arguments)
         {
-            return $"无法读取服务日志：{ex.Message}";
+            startInfo.ArgumentList.Add(argument);
         }
+        return startInfo;
     }
-
-    private static string TranslateState(string? state) => state switch
-    {
-        "running" => "运行中",
-        "starting" => "启动中",
-        "stopping" => "停止中",
-        "stopped" => "已停止",
-        "paused" => "已暂停",
-        _ => "未安装"
-    };
 
     private static string TranslateRuntime(string? state) => state switch
     {
         "active" => "已连接",
         "stale" => "需要清理",
         _ => "已停止"
-    };
-
-    private static string TranslateStartup(string? startup) => startup switch
-    {
-        "automatic-delayed" => "自动（延迟）",
-        "automatic" => "自动",
-        "manual" => "手动",
-        "disabled" => "禁用",
-        _ => "未设置"
     };
 
     private enum StatusKind { Neutral, Success, Warning, Error }
@@ -584,7 +741,7 @@ public sealed class TunScopeConfig
     public bool TcpOnly { get; set; }
 
     [JsonPropertyName("trustedDNS")]
-    public string TrustedDns { get; set; } = "8.8.8.8:53";
+    public string TrustedDns { get; set; } = string.Empty;
 }
 
 public sealed class ServiceStatus
@@ -630,4 +787,7 @@ public sealed class RuntimeStatus
 
     [JsonPropertyName("interface")]
     public string? Interface { get; set; }
+
+    [JsonPropertyName("ownerPid")]
+    public int OwnerPid { get; set; }
 }

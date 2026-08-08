@@ -1,19 +1,19 @@
 # TunScope for Windows
 
-Windows 版本提供 WPF 图形控制面板、标准 Windows Service 和命令行数据面，支持 Windows 10/11 x64、全局 TUN、按可执行文件分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 关闭后服务与 TUN 会继续运行。
+Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面和可选的标准 Windows Service，支持 Windows 10/11 x64、全局 TUN、按可执行文件分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 直接管理前台数据面，正常关闭窗口时会先停止 TUN 并恢复路由。
 
 ## 运行要求
 
 - Windows 10 或 Windows 11 x64。
-- 安装、GUI 和服务控制需要管理员权限；前台 CLI 的 `doctor` 不修改系统。
+- GUI、TUN 数据面和服务控制需要管理员权限；前台 CLI 的 `doctor` 不修改系统。
 - 本地 SOCKS5 服务，例如 `socks5://127.0.0.1:7890`。
 - 官方签名的 `wintun.dll` AMD64 版本。
 
 发布包中的 GUI 是 .NET 8 自包含单文件，不要求目标机器预装 .NET Desktop Runtime。
 
-## 下载与安装
+## 下载与便携运行
 
-标签发布会在 [GitHub Releases](https://github.com/maywine/TunScope/releases) 生成 `tunscope-<版本>-windows-amd64.zip` 和对应的 `.sha256`。压缩包包含自包含的 `TunScope.GUI.exe`、服务/CLI `tunscope.exe`、经官方归档 SHA-256 校验取得的 AMD64 `wintun.dll`、Wintun 许可证、示例配置和安装脚本。
+标签发布会在 [GitHub Releases](https://github.com/maywine/TunScope/releases) 生成 `tunscope-<版本>-windows-amd64.zip` 和对应的 `.sha256`。完整发布包包含自包含的 `TunScope.GUI.exe`、服务/CLI `tunscope.exe`、经官方归档 SHA-256 校验取得的 AMD64 `wintun.dll`、Wintun 许可证、示例配置和可选安装脚本；便携专用目录可以省略安装脚本。
 
 下载后先核对压缩包：
 
@@ -25,35 +25,43 @@ if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
 Expand-Archive $archive -DestinationPath .
 ```
 
-前台 CLI 可以直接在解压目录以便携方式运行。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；推荐打开管理员 PowerShell 执行安装：
+解压后保持 `TunScope.GUI.exe`、`tunscope.exe` 和 `wintun.dll` 位于同一目录，直接双击 `TunScope.GUI.exe` 并确认 UAC 即可。GUI 内的“启动”“停止”和“保存并重启”直接控制前台数据面，不需要执行 PowerShell 脚本，也不会注册 Windows Service。
+
+### 可选的 Windows Service 安装
+
+只有明确需要后台服务且目录内包含 `install.ps1` 时才运行安装脚本。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；在管理员 PowerShell 中执行：
 
 ```powershell
 Set-Location .\tunscope-0.3.12-windows-amd64
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
 ```
 
-安装脚本把固定文件复制到 `%ProgramFiles%\TunScope`，安装“TunScope”服务（默认手动启动），并为 GUI 创建所有用户的开始菜单快捷方式；`-AddToMachinePath` 仍是可选项。它不会启动、停止或重启数据面。更新正在运行的版本时会拒绝覆盖，请先在 GUI 中点“停止”，或手动执行：
+安装脚本把固定文件复制到 `%ProgramFiles%\TunScope`，安装“TunScope”服务（默认手动启动），并为 GUI 创建所有用户的开始菜单快捷方式；`-AddToMachinePath` 仍是可选项。它不会启动、停止或重启数据面。更新正在运行的服务版本时会拒绝覆盖，请先执行：
 
 ```powershell
 & "$env:ProgramFiles\TunScope\tunscope.exe" service stop
 ```
 
-若只想复制便携文件，可给安装脚本传 `-SkipServiceInstall -SkipStartMenuShortcut`。安装后需要新开终端才能使用更新后的 PATH。
+便携 GUI 不需要此脚本。服务安装后需要新开终端才能使用更新后的 PATH。
 
 当前项目没有 Windows 代码签名证书，因此 `TunScope.GUI.exe`、`tunscope.exe` 和 PowerShell 脚本本身未签名，首次下载时可能出现 SmartScreen 提示；包内的 `wintun.dll` 来自 Wintun 官方签名发行包。校验 `.sha256` 只能检测下载损坏或与 GitHub 发布资产不一致，不能替代代码签名。
 
-## GUI 与 Windows Service
+## 便携 GUI
 
-从开始菜单打开 TunScope，确认 UAC 提权。GUI 可以：
+从解压目录打开 TunScope，确认 UAC 提权。GUI 可以：
 
-- 保存 SOCKS5、trusted DNS、IPv6、MTU、绕行节点和日志级别。
-- 选择多个 `.exe`，由服务匹配这些程序及其子进程；列表为空表示全局模式。
-- 安装/更新服务、启动、停止、保存并重启、卸载服务。
-- 每两秒显示 SCM 状态、实际 TUN 状态、物理网卡和服务日志。
+- 保存 SOCKS5、可选 trusted DNS、IPv6、MTU、绕行节点和日志级别；trusted DNS 留空时使用 Windows 当前系统 DNS。
+- 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
+- 无需安装服务即可启动、停止、保存并重启 TUN。
+- 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
 
-GUI 将配置通过标准输入交给 `tunscope.exe`，代理用户名和密码不会出现在子进程命令行。完整配置位于 `%ProgramData%\TunScope\service\config.json`，服务日志位于同目录的 `service.log`；该目录使用受保护 ACL，只允许 LocalSystem 和 Administrators。运行时状态仍位于 `%ProgramData%\TunScope`，不会保存代理密码。
+GUI 将配置通过标准输入交给 `tunscope.exe`，代理用户名和密码不会出现在子进程命令行。完整配置位于 `%ProgramData%\TunScope\service\config.json`；该目录使用受保护 ACL，只允许 LocalSystem 和 Administrators。运行时状态位于 `%ProgramData%\TunScope`，不会保存代理密码。
 
-关闭 GUI 不会停止服务。要恢复路由必须点“停止”或使用 SCM 命令。服务默认采用手动启动：桌面代理通常要在用户登录后才监听 loopback，若把 TunScope 设为开机自动启动，它可能因 SOCKS5 尚未运行而安全退出。仅当本地 SOCKS5 本身也是系统服务时，才在 GUI 中选择“自动（延迟启动）”。
+正常关闭 GUI 时，它会先向前台数据面发送安全停止请求，等待精确路由清理完成后再退出。若 GUI 异常崩溃而数据面仍在运行，重新打开 GUI 后可以查看状态并点击“停止”；下一次启动也会恢复可安全清理的残留状态。
+
+## 可选的 Windows Service
+
+服务模式保留给需要脱离 GUI 长期运行的场景，并通过管理员 CLI 管理。桌面代理通常要在用户登录后才监听 loopback，因此服务默认应使用手动启动；仅当本地 SOCKS5 本身也是系统服务时才建议自动启动。
 
 对应的管理员 CLI：
 
@@ -173,6 +181,8 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 
 ## DNS
 
+GUI 默认不填写“可信 DNS”。留空时，TunScope 保留 Windows 当前系统 DNS 路径；只有显式填写外部 DNS 地址时，才会把进入 TUN 的 DNS 流量经 SOCKS5 发往该地址。
+
 TunScope 不在内部实现 DNS 解析器。Windows 的 DNS Client 服务与 macOS 的 `mDNSResponder` 类似，系统发出的共享 DNS 流量并不总能可靠还原到最初请求解析的应用。因此，存在 DNS 污染或频繁切换网络时，仍建议把系统 DNS 指向本机 `dnscrypt-proxy`，由后者通过同一个 SOCKS5 访问可信上游。
 
 推荐链路：
@@ -188,7 +198,8 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 ## 生命周期和网络切换
 
 - 状态与只清理自身路由所需的清单保存在 `%ProgramData%\TunScope`。
-- Service 配置和日志位于受限 ACL 的 `%ProgramData%\TunScope\service`；日志超过 4 MiB 时保留一个轮转副本。
+- GUI 与 Service 共用的配置位于受限 ACL 的 `%ProgramData%\TunScope\service`；服务模式日志也位于此处，超过 4 MiB 时保留一个轮转副本。
+- 便携 GUI 使用前台 owner 进程；正常关闭 GUI 时会通过 `down` 停止数据面并恢复路由。
 - 服务以 LocalSystem 运行，SCM 状态只在 TUN 真正可用后进入 Running；服务停止和系统关机都复用精确路由清理逻辑。
 - 路由写入 Windows `ActiveStore`，不会在重启后永久保留。
 - `down` 使用随机命名停止事件通知前台 owner；不会向 PID 盲目发送信号。
@@ -204,5 +215,5 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 - 当前发布目标是 Windows x64；ARM64、MSI/完整卸载器、系统托盘和 Microsoft Authenticode 代码签名尚未完成。
 - 按应用识别使用 Windows IP Helper TCP/UDP owner-PID 表。非常短暂、尚未出现在系统表中的流量会优先保持直连，以免影响名单外应用；确认属于引擎自身或存在冲突的流量会阻断。
 - Windows 共享 DNS 服务无法提供严格的逐应用 DNS 归属。需要稳定、防污染的解析时使用本地 `dnscrypt-proxy`，不要把共享系统 DNS 全部假定为某个名单内应用。
-- 只有同一物理网卡上的地址/网关切换能够原位交接；切换到另一块网卡后，服务模式需要重新启动服务，前台 CLI 模式需要重新运行 `up`。
+- 只有同一物理网卡上的地址/网关切换能够原位交接；切换到另一块网卡后，服务模式需要重新启动服务，便携 GUI 或前台 CLI 需要重新启动数据面。
 - 真实 Windows 机器上的 Wintun、代理程序和企业安全软件组合仍应逐项验证。

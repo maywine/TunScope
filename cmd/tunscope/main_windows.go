@@ -116,7 +116,7 @@ func runUp(app *tunscope.App, args []string, stderr io.Writer) error {
 	fs.BoolVar(&cfg.AutoBypass, "auto-bypass", cfg.AutoBypass, "discover current remote peers of a loopback proxy (best effort)")
 	fs.BoolVar(&cfg.IPv6, "ipv6", cfg.IPv6, "capture IPv6 traffic as well as IPv4")
 	fs.BoolVar(&cfg.TCPOnly, "tcp-only", cfg.TCPOnly, "block selected-application non-DNS UDP for TCP fallback")
-	fs.StringVar(&cfg.TrustedDNS, "trusted-dns", cfg.TrustedDNS, "DNS resolver reached through SOCKS5 in per-app mode")
+	fs.StringVar(&cfg.TrustedDNS, "trusted-dns", cfg.TrustedDNS, "DNS resolver reached through SOCKS5 in per-app mode (empty keeps system DNS direct)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

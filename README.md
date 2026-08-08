@@ -10,7 +10,7 @@ TunScope 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、I
 - 应用包内的单文件 Go helper 以管理员身份创建 `utun` 并管理路由。
 - macOS `libproc` 把每条 TCP/UDP 连接映射到应用或父进程。
 - 选中应用走本地 SOCKS5；其他应用由绑定物理网卡的 socket 配合接口作用域路由直连，避免直连流量再次进入 TUN；暂时无法识别的连接保持直连，已确认属于 engine 或归属冲突的连接仍会阻断以防回环。
-- 按应用模式默认把进入 TUN 的 53 端口 DNS 发往经 SOCKS5 到达的 trusted DNS；`127.0.0.1`/`::1` 等本地系统解析器仍留在 loopback。命令行将 `--trusted-dns` 设为空时，外部系统解析器才保持物理直连。
+- macOS 图形应用当前会显式配置 trusted DNS；单独使用命令行时默认使用系统 DNS。显式设置 `--trusted-dns` 后，进入 TUN 的 53 端口 DNS 会发往经 SOCKS5 到达的指定解析器；`127.0.0.1`/`::1` 等本地系统解析器仍留在 loopback。
 
 数据面使用 [tun2socks](https://github.com/xjasonlyu/tun2socks) / gVisor，不安装内核扩展。
 
@@ -24,7 +24,7 @@ open macos/TunScope.xcodeproj
 
 ## Windows 应用与服务
 
-Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。自包含的 WPF GUI 管理标准 Windows Service、应用列表和代理配置；服务只有在 TUN 路由真正激活后才向 SCM 报告 Running，并沿用 TunScope 的状态恢复、精确路由清理与 SOCKS5 TCP/UDP 探测。前台 CLI 仍然保留。
+Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。自包含的 WPF GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
 
 ```powershell
 .\tunscope.exe up `
@@ -32,7 +32,7 @@ Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
-Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。安装脚本默认安装手动启动的服务但不会启动或停止数据面。构建、安装、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新启动服务。
+Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新启动数据面。
 
 ## 搭配 dnscrypt-proxy
 
@@ -121,7 +121,7 @@ timeout 2
 其他注意事项：
 
 - 不要把提供本地 SOCKS5 的代理应用加入 TunScope 名单；dnscrypt-proxy 通常也无需加入。
-- `--trusted-dns` 表示 TunScope 经 SOCKS5 访问的外部 DNS，不能设置为 `127.0.0.1`。命令行若希望保留系统 dnscrypt-proxy 路径，可显式传入 `--trusted-dns ''`。
+- `--trusted-dns` 表示 TunScope 经 SOCKS5 访问的外部 DNS，不能设置为 `127.0.0.1`；留空或不传时使用系统 DNS，可保留系统 dnscrypt-proxy 路径。
 - 浏览器内置的“安全 DNS”或 DoH 可能绕过系统解析器；如果希望所有普通域名都由 dnscrypt-proxy 处理，需要在浏览器中关闭该功能。
 - 停止或卸载 dnscrypt-proxy 前，应恢复之前保存的 DNS。若原来使用 DHCP 自动 DNS，可执行：
 
