@@ -33,22 +33,26 @@ type processMatcher interface {
 // miss cannot break an unrelated application. Connections proven to belong to
 // this engine, or with conflicting ownership evidence, remain fail-closed.
 type PerAppDialer struct {
-	matcher    processMatcher
-	socks      proxy.Dialer
-	dns        proxy.Dialer
-	direct     proxy.Dialer
-	reject     proxy.Dialer
-	proxyUDP   bool
-	trustedDNS netip.AddrPort
-	flows      flowTracker
+	matcher     processMatcher
+	socks       proxy.Dialer
+	dns         proxy.Dialer
+	direct      proxy.Dialer
+	reject      proxy.Dialer
+	proxyUDP    bool
+	trustedDNS  netip.AddrPort
+	flows       flowTracker
+	networkMu   sync.Mutex
+	invalidated bool
 }
 
 // TrackedProxyDialer gives global mode the same in-place flow invalidation as
 // per-app mode. It otherwise behaves exactly like the configured SOCKS5
 // dialer, including UDP relay support.
 type TrackedProxyDialer struct {
-	socks proxy.Dialer
-	flows flowTracker
+	socks       proxy.Dialer
+	flows       flowTracker
+	networkMu   sync.Mutex
+	invalidated bool
 }
 
 // flowTracker owns the egress side of every connection created by the
@@ -240,6 +244,28 @@ func (d *TrackedProxyDialer) RebindNetwork(string) (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("global proxy dialer is nil")
 	}
+	d.networkMu.Lock()
+	defer d.networkMu.Unlock()
+	if d.invalidated {
+		d.invalidated = false
+		return 0, nil
+	}
+	return d.flows.reset(), nil
+}
+
+// InvalidateNetwork advances the flow generation as soon as the physical
+// route disappears. Recovery then only publishes the replacement source; it
+// must not close flows a second time after the new network becomes usable.
+func (d *TrackedProxyDialer) InvalidateNetwork() (int, error) {
+	if d == nil {
+		return 0, fmt.Errorf("global proxy dialer is nil")
+	}
+	d.networkMu.Lock()
+	defer d.networkMu.Unlock()
+	if d.invalidated {
+		return 0, nil
+	}
+	d.invalidated = true
 	return d.flows.reset(), nil
 }
 
@@ -400,12 +426,15 @@ func (d *PerAppDialer) ResetConnections() int {
 }
 
 // RebindNetwork publishes the new physical source before advancing the flow
-// generation. A dial which raced with the update is rejected by the generation
-// check, so no connection created with the removed address can survive.
+// generation for a live change. If an unavailable interval already advanced
+// the generation, recovery only publishes the source so connections opened on
+// the replacement network are not closed a second time.
 func (d *PerAppDialer) RebindNetwork(source4 string) (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("per-app dialer is nil")
 	}
+	d.networkMu.Lock()
+	defer d.networkMu.Unlock()
 	direct, ok := d.direct.(*boundDirectDialer)
 	if !ok {
 		return 0, fmt.Errorf("direct dialer does not support network rebinding")
@@ -413,5 +442,34 @@ func (d *PerAppDialer) RebindNetwork(source4 string) (int, error) {
 	if err := direct.setSource4(source4); err != nil {
 		return 0, err
 	}
+	if d.invalidated {
+		d.invalidated = false
+		return 0, nil
+	}
+	return d.flows.reset(), nil
+}
+
+// InvalidateNetwork removes the vanished IPv4 source before advancing the
+// flow generation. Until a complete replacement snapshot arrives, new direct
+// sockets stay bound to the physical interface but let the kernel choose its
+// currently valid source address instead of repeatedly using the old DHCP
+// address and failing with EADDRNOTAVAIL.
+func (d *PerAppDialer) InvalidateNetwork() (int, error) {
+	if d == nil {
+		return 0, fmt.Errorf("per-app dialer is nil")
+	}
+	d.networkMu.Lock()
+	defer d.networkMu.Unlock()
+	if d.invalidated {
+		return 0, nil
+	}
+	direct, ok := d.direct.(*boundDirectDialer)
+	if !ok {
+		return 0, fmt.Errorf("direct dialer does not support network invalidation")
+	}
+	if err := direct.setSource4(""); err != nil {
+		return 0, err
+	}
+	d.invalidated = true
 	return d.flows.reset(), nil
 }

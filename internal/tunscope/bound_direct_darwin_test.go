@@ -79,3 +79,52 @@ func TestBoundDirectDialerUpdatesValidatedIPv4Source(t *testing.T) {
 		t.Fatal("expected loopback source to be rejected")
 	}
 }
+
+func TestPerAppDialerInvalidationClearsSourceWithoutResettingRecoveredFlowTwice(t *testing.T) {
+	rawDirect, err := newBoundDirectDialer("lo0", "", "192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := rawDirect.(*boundDirectDialer)
+	d := &PerAppDialer{direct: direct}
+
+	first, firstPeer := net.Pipe()
+	defer firstPeer.Close()
+	if _, err := d.flows.trackConn(d.flows.currentGeneration(), first); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := d.InvalidateNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed != 1 {
+		t.Fatalf("flows closed at invalidation = %d, want 1", closed)
+	}
+	if source := direct.currentSource4(); source.IsValid() {
+		t.Fatalf("direct source after invalidation = %s, want unset", source)
+	}
+
+	recovered, recoveredPeer := net.Pipe()
+	defer recoveredPeer.Close()
+	if _, err := d.flows.trackConn(d.flows.currentGeneration(), recovered); err != nil {
+		t.Fatal(err)
+	}
+	closed, err = d.RebindNetwork("192.0.2.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed != 0 {
+		t.Fatalf("flows closed again at recovery = %d, want 0", closed)
+	}
+	if source := direct.currentSource4().String(); source != "192.0.2.37" {
+		t.Fatalf("direct source after recovery = %q", source)
+	}
+
+	closed, err = d.RebindNetwork("192.0.2.38")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed != 1 {
+		t.Fatalf("flows closed by later live change = %d, want 1", closed)
+	}
+}

@@ -373,6 +373,22 @@ activeLoop:
 				fmt.Fprintf(a.out, "network update: %s\n", update)
 			}
 			if reconcileErr != nil {
+				var networkUnavailable *physicalNetworkUnavailableSignal
+				if errors.As(reconcileErr, &networkUnavailable) {
+					closed, err := engineControl.InvalidateNetwork(3 * time.Second)
+					if err != nil {
+						returnErr = fmt.Errorf("invalidate TUN flows after physical network loss: %w", err)
+						fmt.Fprintln(a.errOut, returnErr)
+						break activeLoop
+					}
+					fmt.Fprintf(
+						a.out,
+						"network update: %s; engine cleared the stale physical source and closed %d egress connection(s), TUN capture remained active\n",
+						networkUnavailable,
+						closed,
+					)
+					continue
+				}
 				var networkChange *physicalNetworkChangeError
 				if errors.As(reconcileErr, &networkChange) {
 					fmt.Fprintf(a.out, "network update: %s; physical routes refreshed, rebinding old flows without dropping TUN capture\n", networkChange)
@@ -463,13 +479,26 @@ func newEngineController(commands, responseFile *os.File) *engineController {
 }
 
 func (c *engineController) RebindNetwork(source4 string, timeout time.Duration) (int, error) {
+	return c.sendNetworkCommand(func(generation uint64) EngineControlCommand {
+		return NewEngineNetworkCommand(generation, source4)
+	}, timeout)
+}
+
+func (c *engineController) InvalidateNetwork(timeout time.Duration) (int, error) {
+	return c.sendNetworkCommand(NewEngineNetworkInvalidationCommand, timeout)
+}
+
+func (c *engineController) sendNetworkCommand(
+	newCommand func(uint64) EngineControlCommand,
+	timeout time.Duration,
+) (int, error) {
 	if c == nil {
 		return 0, fmt.Errorf("engine control channel is unavailable")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.generation++
-	command := NewEngineNetworkCommand(c.generation, source4)
+	command := newCommand(c.generation)
 	if err := json.NewEncoder(c.commands).Encode(command); err != nil {
 		return 0, fmt.Errorf("send engine network generation %d: %w", command.Generation, err)
 	}

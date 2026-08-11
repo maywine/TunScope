@@ -47,7 +47,10 @@ type EngineConfig struct {
 	LogLevel         string   `json:"logLevel"`
 }
 
-const engineActionRebindNetwork = "rebind-network"
+const (
+	engineActionInvalidateNetwork = "invalidate-network"
+	engineActionRebindNetwork     = "rebind-network"
+)
 
 // EngineControlCommand and EngineControlResponse are exchanged over private
 // inherited pipes. Unlike an asynchronous signal, the response proves that
@@ -67,6 +70,14 @@ type EngineControlResponse struct {
 
 func NewEngineNetworkCommand(generation uint64, source4 string) EngineControlCommand {
 	return EngineControlCommand{Action: engineActionRebindNetwork, Generation: generation, Source4: source4}
+}
+
+func NewEngineNetworkInvalidationCommand(generation uint64) EngineControlCommand {
+	return EngineControlCommand{Action: engineActionInvalidateNetwork, Generation: generation}
+}
+
+func (c EngineControlCommand) IsNetworkInvalidation() bool {
+	return c.Action == engineActionInvalidateNetwork
 }
 
 func (c EngineControlCommand) IsNetworkRebind() bool {

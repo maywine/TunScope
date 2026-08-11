@@ -68,6 +68,14 @@ func reconcileTestState(cfg Config, snapshot physicalRouteSnapshot, bypasses []n
 	}
 }
 
+func requireNetworkUnavailableSignal(t *testing.T, err error) {
+	t.Helper()
+	var signal *physicalNetworkUnavailableSignal
+	if !errors.As(err, &signal) {
+		t.Fatalf("error = %v, want physicalNetworkUnavailableSignal", err)
+	}
+}
+
 func TestStableObservationDebouncesTransientValue(t *testing.T) {
 	tracker := newStableObservation(3, "old")
 	if tracker.observe("new") || tracker.observe("new") {
@@ -540,7 +548,9 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 
 	for i := 0; i < 3*networkStableSampleCount; i++ {
 		updates, err := monitor.poll(app, state, cfg)
-		if err != nil {
+		if i == 0 {
+			requireNetworkUnavailableSignal(t, err)
+		} else if err != nil {
 			t.Fatalf("missing-route poll %d stopped TUN: %v", i, err)
 		}
 		if i == 0 {
@@ -556,16 +566,9 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 	}
 
 	runner.routeOutput = ""
-	var recoveryErr error
-	for i := 0; i < addressStableSampleCount; i++ {
-		updates, err := monitor.poll(app, state, cfg)
-		recoveryErr = err
-		if i == 0 && (len(updates) != 1 || !strings.Contains(updates[0], "available again")) {
-			t.Fatalf("first recovery update = %#v", updates)
-		}
-		if i < addressStableSampleCount-1 && err != nil {
-			t.Fatalf("recovery poll %d returned before stability threshold: %v", i, err)
-		}
+	updates, recoveryErr := monitor.poll(app, state, cfg)
+	if len(updates) != 1 || !strings.Contains(updates[0], "available again") {
+		t.Fatalf("first recovery update = %#v", updates)
 	}
 	var change *physicalNetworkChangeError
 	if !errors.As(recoveryErr, &change) {
@@ -573,6 +576,35 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 	}
 	if change.Source4 != "192.168.50.37" || state.Gateway4 != "192.168.50.1" {
 		t.Fatalf("recovered change/state = %#v / %#v", change, state)
+	}
+}
+
+func TestMonitorDefersInvalidationUntilPreviousSourceDisappears(t *testing.T) {
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	runner := &liveMonitorRunner{
+		routeOutput: "route to: default\n",
+		ipv4Address: before.Source4,
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+
+	updates, err := monitor.poll(app, state, cfg)
+	if err != nil {
+		t.Fatalf("route gap with an assigned source requested invalidation: %v", err)
+	}
+	if len(updates) != 2 || !strings.Contains(updates[1], "remains assigned") {
+		t.Fatalf("assigned-source updates = %#v", updates)
+	}
+
+	runner.ipv4Address = "192.168.50.37"
+	_, err = monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
+	if !monitor.sourceInvalidated {
+		t.Fatal("source invalidation was not recorded")
 	}
 }
 
@@ -589,9 +621,8 @@ func TestMonitorStopsAfterPhysicalNetworkUnavailableGrace(t *testing.T) {
 	monitor.now = func() time.Time { return now }
 	monitor.fullWake = func() bool { return true }
 
-	if _, err := monitor.poll(app, state, cfg); err != nil {
-		t.Fatalf("first unavailable sample stopped TUN: %v", err)
-	}
+	_, err := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
 	for monitor.routeUnavailableFor+networkPollInterval < networkUnavailableGrace {
 		now = now.Add(networkPollInterval)
 		if _, err := monitor.poll(app, state, cfg); err != nil {
@@ -599,7 +630,7 @@ func TestMonitorStopsAfterPhysicalNetworkUnavailableGrace(t *testing.T) {
 		}
 	}
 	now = now.Add(networkPollInterval)
-	_, err := monitor.poll(app, state, cfg)
+	_, err = monitor.poll(app, state, cfg)
 	var change *physicalNetworkChangeError
 	if err == nil || errors.As(err, &change) || !strings.Contains(err.Error(), "remained unavailable") {
 		t.Fatalf("expired unavailable grace error = %v", err)
@@ -621,9 +652,7 @@ func TestMonitorPausesUnavailableGraceDuringSleepAndDarkWake(t *testing.T) {
 	monitor.fullWake = func() bool { return fullWake }
 
 	updates, err := monitor.poll(app, state, cfg)
-	if err != nil {
-		t.Fatalf("first dark-wake sample stopped TUN: %v", err)
-	}
+	requireNetworkUnavailableSignal(t, err)
 	if len(updates) != 2 || !strings.Contains(updates[1], "pausing") {
 		t.Fatalf("dark-wake updates = %#v", updates)
 	}
@@ -675,9 +704,8 @@ func TestMonitorDoesNotChargeAWholeSuspendedPollGap(t *testing.T) {
 	monitor.now = func() time.Time { return now }
 	monitor.fullWake = func() bool { return true }
 
-	if _, err := monitor.poll(app, state, cfg); err != nil {
-		t.Fatal(err)
-	}
+	_, err := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
 	now = now.Add(8 * time.Hour)
 	if _, err := monitor.poll(app, state, cfg); err != nil {
 		t.Fatalf("a suspended poll gap stopped TUN immediately: %v", err)
@@ -824,10 +852,7 @@ func TestMonitorRefreshesRoutesAndRebindsAfterSameNetworkReturns(t *testing.T) {
 		}
 	}
 	runner.routeOutput = ""
-	var recoveryErr error
-	for i := 0; i < addressStableSampleCount; i++ {
-		_, recoveryErr = monitor.poll(app, state, cfg)
-	}
+	_, recoveryErr := monitor.poll(app, state, cfg)
 	var change *physicalNetworkChangeError
 	if !errors.As(recoveryErr, &change) {
 		t.Fatalf("same-network recovery error = %v, want physicalNetworkChangeError", recoveryErr)

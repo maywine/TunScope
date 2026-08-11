@@ -270,6 +270,7 @@ func runEngineChild() int {
 	engine.Insert(key)
 	engine.Start()
 	type networkDialer interface {
+		InvalidateNetwork() (int, error)
 		RebindNetwork(string) (int, error)
 		Close() error
 	}
@@ -329,14 +330,20 @@ func runEngineChild() int {
 				Action: command.Action, Generation: command.Generation,
 			}
 			switch {
-			case !command.IsNetworkRebind():
-				response.Error = "unsupported engine control action"
-			default:
+			case command.IsNetworkInvalidation():
+				closed, err := activeDialer.InvalidateNetwork()
+				response.Closed = closed
+				if err != nil {
+					response.Error = err.Error()
+				}
+			case command.IsNetworkRebind():
 				closed, err := activeDialer.RebindNetwork(command.Source4)
 				response.Closed = closed
 				if err != nil {
 					response.Error = err.Error()
 				}
+			default:
+				response.Error = "unsupported engine control action"
 			}
 			if err := responseEncoder.Encode(response); err != nil {
 				fmt.Fprintf(os.Stderr, "engine: send control response: %v\n", err)

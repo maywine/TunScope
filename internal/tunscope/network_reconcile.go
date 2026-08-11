@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	networkStableSampleCount = 3
-	addressStableSampleCount = 2
-	proxyPeerPollEvery       = 4
-	networkUnavailableGrace  = 30 * time.Second
+	networkStableSampleCount   = 3
+	addressStableSampleCount   = 2
+	networkRecoverySampleCount = 1
+	proxyPeerPollEvery         = 4
+	networkUnavailableGrace    = 30 * time.Second
 )
 
 var networkPollInterval = 750 * time.Millisecond
@@ -39,6 +40,17 @@ type physicalNetworkChangeError struct {
 }
 
 func (e *physicalNetworkChangeError) Error() string {
+	return e.Description
+}
+
+// physicalNetworkUnavailableSignal tells the owner to invalidate the engine's
+// old physical source immediately while the monitor keeps the TUN and capture
+// routes alive. It is emitted once per unavailable interval.
+type physicalNetworkUnavailableSignal struct {
+	Description string
+}
+
+func (e *physicalNetworkUnavailableSignal) Error() string {
 	return e.Description
 }
 
@@ -203,6 +215,22 @@ func interfaceAddresses(r commandRunner, iface string) ([]string, []string, erro
 	sort.Strings(ipv4)
 	sort.Strings(ipv6)
 	return ipv4, ipv6, nil
+}
+
+func physicalSourceAssigned(r commandRunner, snapshot physicalRouteSnapshot) (bool, error) {
+	if snapshot.Interface == "" || snapshot.Source4 == "" {
+		return false, nil
+	}
+	ipv4, _, err := interfaceAddresses(r, snapshot.Interface)
+	if err != nil {
+		return false, err
+	}
+	for _, address := range ipv4 {
+		if address == snapshot.Source4 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // stableObservation keeps transient route/DNS/peer snapshots from causing
@@ -685,6 +713,7 @@ type liveNetworkMonitor struct {
 	routeSampleFullWake bool
 	routeTimeoutPaused  bool
 	recoveryPending     bool
+	sourceInvalidated   bool
 	dnsUnavailable      bool
 	now                 func() time.Time
 	fullWake            func() bool
@@ -724,7 +753,10 @@ func newLiveNetworkMonitor(
 			addressStableSampleCount,
 			observationSignature(route.signature(), nil),
 		),
-		recoveryObservation: newStableObservation(addressStableSampleCount, ""),
+		// samplePhysicalRoute already returns an atomic gateway/interface/source
+		// snapshot. After an explicit unavailable gap, the first complete snapshot
+		// is therefore safe to apply without waiting for a duplicate sample.
+		recoveryObservation: newStableObservation(networkRecoverySampleCount, ""),
 		dnsObservation: newStableObservation(
 			networkStableSampleCount,
 			observationSignature(addrSetSignature(dnsServers), nil),
@@ -788,8 +820,10 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			if m.fullWake != nil {
 				fullWake = m.fullWake()
 			}
-			if !m.routeUnavailable {
+			firstUnavailable := !m.routeUnavailable
+			if firstUnavailable {
 				m.resetUnavailableTime()
+				m.sourceInvalidated = false
 				updates = append(updates, fmt.Sprintf(
 					"physical network temporarily unavailable; keeping TUN capture active while waiting: %v",
 					unavailable,
@@ -822,11 +856,34 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 					unavailable,
 				)
 			}
+			if !m.sourceInvalidated {
+				sourceAssigned, assignmentErr := physicalSourceAssigned(a.runner, m.route)
+				switch {
+				case assignmentErr != nil && firstUnavailable:
+					updates = append(updates, fmt.Sprintf(
+						"could not verify whether previous physical IPv4 source %s is still assigned; deferring engine invalidation: %v",
+						m.route.Source4,
+						assignmentErr,
+					))
+				case sourceAssigned && firstUnavailable:
+					updates = append(updates, fmt.Sprintf(
+						"previous physical IPv4 source %s remains assigned; deferring engine invalidation",
+						m.route.Source4,
+					))
+				case assignmentErr == nil && !sourceAssigned:
+					m.sourceInvalidated = true
+					return updates, &physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
+						"physical network became unavailable; invalidating stale direct source %s",
+						m.route.Source4,
+					)}
+				}
+			}
 			return updates, nil
 		}
 	} else if m.routeUnavailable {
 		m.routeUnavailable = false
 		m.resetUnavailableTime()
+		m.sourceInvalidated = false
 		updates = append(updates, "physical network is available again; validating the replacement route")
 	}
 	if routeErr == nil && m.recoveryPending {

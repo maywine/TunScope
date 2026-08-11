@@ -44,6 +44,47 @@ func TestEngineControllerWaitsForMatchingAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestEngineControllerSendsNetworkInvalidation(t *testing.T) {
+	commandRead, commandWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseRead, responseWrite, err := os.Pipe()
+	if err != nil {
+		commandRead.Close()
+		commandWrite.Close()
+		t.Fatal(err)
+	}
+	defer commandRead.Close()
+	defer responseWrite.Close()
+	controller := newEngineController(commandWrite, responseRead)
+	defer controller.Close()
+	commands := make(chan EngineControlCommand, 1)
+
+	go func() {
+		var command EngineControlCommand
+		if err := json.NewDecoder(commandRead).Decode(&command); err != nil {
+			return
+		}
+		commands <- command
+		_ = json.NewEncoder(responseWrite).Encode(EngineControlResponse{
+			Action: command.Action, Generation: command.Generation, Closed: 3,
+		})
+	}()
+
+	closed, err := controller.InvalidateNetwork(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed != 3 {
+		t.Fatalf("acknowledged closed flows = %d, want 3", closed)
+	}
+	command := <-commands
+	if !command.IsNetworkInvalidation() || command.Source4 != "" {
+		t.Fatalf("invalidation command = %#v", command)
+	}
+}
+
 func TestEngineControllerRejectsMismatchedAcknowledgement(t *testing.T) {
 	commandRead, commandWrite, err := os.Pipe()
 	if err != nil {
