@@ -169,6 +169,7 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 		Gateway6:       physical.Gateway6,
 		AutoBypasses:   append([]string(nil), autoPeers...),
 		Applications:   append([]string(nil), cfg.Applications...),
+		ICMPDirect:     cfg.ICMPDirect,
 	}
 	if physical.Source6 != "" {
 		state.PhysicalIPv6 = []string{physical.Source6}
@@ -186,6 +187,8 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 		Applications:     append([]string(nil), cfg.Applications...),
 		ProxyUDP:         capabilities.UDP,
 		TrustedDNS:       cfg.TrustedDNS,
+		IPv6:             cfg.IPv6,
+		ICMPDirect:       cfg.ICMPDirect,
 		MTU:              cfg.MTU,
 		LogLevel:         cfg.LogLevel,
 	}
@@ -264,6 +267,9 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	if len(cfg.Applications) > 0 {
 		fmt.Fprintf(a.out, "per-app mode is active for %d application(s); unselected and unknown owners stay on the physical interface\n", len(cfg.Applications))
 	}
+	if cfg.ICMPDirect {
+		fmt.Fprintf(a.out, "direct ICMP echo forwarding is active on %s; ICMP from all applications bypasses SOCKS5\n", physical.InterfaceAlias)
+	}
 	if len(autoPeers) > 0 {
 		fmt.Fprintf(a.out, "auto-bypassed %d current proxy peer(s): %s\n", len(autoPeers), strings.Join(autoPeers, ", "))
 	}
@@ -325,7 +331,7 @@ activeLoop:
 					}
 					fmt.Fprintf(
 						a.out,
-						"network update: suspended %d owned route(s), cleared the physical source, and closed %d egress connection(s); applications now use the Windows system network until recovery\n",
+						"network update: suspended %d owned route(s), cleared the physical source, and closed %d egress flow(s); applications now use the Windows system network until recovery\n",
 						suspended,
 						closed,
 					)
@@ -381,7 +387,7 @@ activeLoop:
 				}
 				fmt.Fprintf(
 					a.out,
-					"network update: physical path changed on %s; suspended %d owned route(s), cleared the old source, and closed %d egress connection(s); validating the replacement network before capture resumes\n",
+					"network update: physical path changed on %s; suspended %d owned route(s), cleared the old source, and closed %d egress flow(s); validating the replacement network before capture resumes\n",
 					next.InterfaceAlias,
 					suspended,
 					closed,
@@ -457,7 +463,7 @@ activeLoop:
 				returnErr = fmt.Errorf("resume Windows TUN capture after physical network recovery: %w", err)
 				break activeLoop
 			}
-			fmt.Fprintf(a.out, "network update: physical network recovered on %s (%s via %s); engine acknowledged the handoff, closed %d stale egress connection(s), and restored %d TUN capture route(s)\n", next.InterfaceAlias, next.Source4, next.Gateway4, closed, resumed)
+			fmt.Fprintf(a.out, "network update: physical network recovered on %s (%s via %s); engine acknowledged the handoff, closed %d stale egress flow(s), and restored %d TUN capture route(s)\n", next.InterfaceAlias, next.Source4, next.Gateway4, closed, resumed)
 			physical = next
 			physicalSignature = nextSignature
 			physicalPathSignature = nextPathSignature
@@ -1260,6 +1266,9 @@ func (a *App) Status() error {
 	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
 	if len(state.Applications) > 0 {
 		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))
+	}
+	if state.ICMPDirect {
+		fmt.Fprintln(a.out, "ICMP echo: direct via physical interface (bypasses SOCKS5)")
 	}
 	counts := make(map[string]int)
 	for _, route := range state.Routes {

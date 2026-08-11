@@ -83,6 +83,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="14" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="14" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="18" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
@@ -119,7 +121,11 @@
                                    Foreground="#596579" VerticalAlignment="Center"
                                    Text="无需安装服务" />
 
-                        <Border Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="5" Background="#F7F9FC" BorderBrush="#E3E8EF" BorderThickness="1" CornerRadius="6" Padding="12">
+                        <CheckBox Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="5" x:Name="IcmpDirectCheckBox"
+                                  Content="ICMP 直连（所有应用的 ping 绕过 SOCKS5；网络切换时自动暂停）"
+                                  VerticalAlignment="Center" />
+
+                        <Border Grid.Row="14" Grid.Column="0" Grid.ColumnSpan="5" Background="#F7F9FC" BorderBrush="#E3E8EF" BorderThickness="1" CornerRadius="6" Padding="12">
                             <TextBlock Foreground="#596579" TextWrapping="Wrap"
                                        Text="直接点击“启动”即可运行，无需执行 install.ps1。GUI 直接管理前台数据面；正常关闭窗口时会先安全停止 TUN 并恢复路由。" />
                         </Border>

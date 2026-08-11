@@ -152,6 +152,7 @@ public partial class MainWindow : Window
         AutoBypassCheckBox.IsChecked = config.AutoBypass;
         Ipv6CheckBox.IsChecked = config.Ipv6;
         TcpOnlyCheckBox.IsChecked = config.TcpOnly;
+        IcmpDirectCheckBox.IsChecked = config.IcmpDirect;
         BypassTextBox.Text = string.Join(Environment.NewLine, config.Bypass ?? []);
 
         _applications.Clear();
@@ -202,7 +203,8 @@ public partial class MainWindow : Window
             LogLevel = logLevel,
             AutoBypass = AutoBypassCheckBox.IsChecked == true,
             Ipv6 = Ipv6CheckBox.IsChecked == true,
-            TcpOnly = TcpOnlyCheckBox.IsChecked == true
+            TcpOnly = TcpOnlyCheckBox.IsChecked == true,
+            IcmpDirect = IcmpDirectCheckBox.IsChecked == true
         };
     }
 
@@ -751,6 +753,9 @@ public sealed class TunScopeConfig
 
     [JsonPropertyName("trustedDNS")]
     public string TrustedDns { get; set; } = string.Empty;
+
+    [JsonPropertyName("icmpDirect")]
+    public bool IcmpDirect { get; set; } = true;
 }
 
 public sealed class ServiceStatus

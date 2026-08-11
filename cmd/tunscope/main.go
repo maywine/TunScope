@@ -17,8 +17,7 @@ import (
 	"time"
 
 	_ "github.com/xjasonlyu/tun2socks/v2/dns"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
 
 	"github.com/maywine/TunScope/internal/tunscope"
 )
@@ -147,6 +146,7 @@ func runUp(app *tunscope.App, args []string, stderr io.Writer) error {
 	fs.BoolVar(&cfg.IPv6, "ipv6", cfg.IPv6, "capture IPv6 traffic as well as IPv4")
 	fs.BoolVar(&cfg.TCPOnly, "tcp-only", cfg.TCPOnly, "block selected-app non-DNS UDP so supported applications use TCP")
 	fs.StringVar(&cfg.TrustedDNS, "trusted-dns", cfg.TrustedDNS, "DNS resolver reached through SOCKS5 in per-app mode (empty keeps system DNS direct)")
+	fs.BoolVar(&cfg.ICMPDirect, "icmp-direct", cfg.ICMPDirect, "forward ICMP echo directly on the physical interface (bypasses SOCKS5 for all applications)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -259,17 +259,8 @@ func runEngineChild() int {
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(stopCh)
 
-	key := &engine.Key{
-		Device:     cfg.Device,
-		Proxy:      cfg.Proxy,
-		Interface:  cfg.Interface,
-		MTU:        cfg.MTU,
-		LogLevel:   cfg.LogLevel,
-		UDPTimeout: 2 * time.Minute,
-	}
-	engine.Insert(key)
-	engine.Start()
 	type networkDialer interface {
+		proxy.Dialer
 		InvalidateNetwork() (int, error)
 		RebindNetwork(string) (int, error)
 		Close() error
@@ -289,22 +280,24 @@ func runEngineChild() int {
 		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "engine: configure per-app routing: %v\n", err)
-			engine.Stop()
 			return 1
 		}
-		tunnel.T().SetDialer(perAppDialer)
 		activeDialer = perAppDialer
 	} else {
 		trackedProxy, err := tunscope.NewTrackedProxyDialer(cfg.Proxy)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "engine: configure tracked proxy routing: %v\n", err)
-			engine.Stop()
 			return 1
 		}
-		tunnel.T().SetDialer(trackedProxy)
 		activeDialer = trackedProxy
 	}
 	defer activeDialer.Close()
+	dataPlane, err := tunscope.StartEngineDataPlane(cfg, activeDialer)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "engine: start data plane: %v\n", err)
+		return 1
+	}
+	defer dataPlane.Close()
 
 	commandCh := make(chan tunscope.EngineControlCommand)
 	controlErrCh := make(chan error, 1)
@@ -323,7 +316,6 @@ func runEngineChild() int {
 	for {
 		select {
 		case <-stopCh:
-			engine.Stop()
 			return 0
 		case command := <-commandCh:
 			response := tunscope.EngineControlResponse{
@@ -331,13 +323,13 @@ func runEngineChild() int {
 			}
 			switch {
 			case command.IsNetworkInvalidation():
-				closed, err := activeDialer.InvalidateNetwork()
+				closed, err := invalidateNetwork(dataPlane, activeDialer)
 				response.Closed = closed
 				if err != nil {
 					response.Error = err.Error()
 				}
 			case command.IsNetworkRebind():
-				closed, err := activeDialer.RebindNetwork(command.Source4)
+				closed, err := rebindNetwork(command.Source4, dataPlane, activeDialer)
 				response.Closed = closed
 				if err != nil {
 					response.Error = err.Error()
@@ -347,12 +339,10 @@ func runEngineChild() int {
 			}
 			if err := responseEncoder.Encode(response); err != nil {
 				fmt.Fprintf(os.Stderr, "engine: send control response: %v\n", err)
-				engine.Stop()
 				return 1
 			}
 		case err := <-controlErrCh:
 			fmt.Fprintf(os.Stderr, "engine: control channel failed: %v\n", err)
-			engine.Stop()
 			return 1
 		}
 	}

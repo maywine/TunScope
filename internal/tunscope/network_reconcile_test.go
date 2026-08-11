@@ -144,6 +144,34 @@ func TestPhysicalRoutesSkipLoopbackDNS(t *testing.T) {
 	}
 }
 
+func TestGlobalDirectICMPGetsScopedRoutesWithoutDirectDNS(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.IPv6 = false
+	cfg.Applications = nil
+	cfg.ICMPDirect = true
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	routes := physicalRoutesForSnapshot(
+		cfg,
+		snapshot,
+		nil,
+		[]netip.Addr{netip.MustParseAddr("223.5.5.5")},
+	)
+	directScopes := 0
+	for _, route := range routes {
+		if route.Purpose == "dns-direct" {
+			t.Fatalf("global ICMP mode changed the system DNS path: %#v", route)
+		}
+		if route.Purpose == "direct-scope" {
+			directScopes++
+		}
+	}
+	if directScopes != len(ipv4TunNetworks) {
+		t.Fatalf("direct-scope routes = %d, want %d", directScopes, len(ipv4TunNetworks))
+	}
+}
+
 func TestChangeMissingRouteFallsBackToAdd(t *testing.T) {
 	route := Route{
 		Family: "inet", Kind: "net", Target: "1.0.0.0/8",

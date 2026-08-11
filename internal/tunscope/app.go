@@ -139,7 +139,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		Gateway4: gateway4, Interface: iface,
 		Gateway6: gateway6, Interface6: iface6,
 	}
-	if automaticNetwork {
+	if automaticNetwork || cfg.ICMPDirect {
 		initialPhysicalRoute, err = samplePhysicalAddresses(a.runner, initialPhysicalRoute, cfg.IPv6 && iface6 != "")
 		if err != nil {
 			return fmt.Errorf("record initial physical interface addresses: %w", err)
@@ -201,6 +201,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		Gateway6:       gateway6,
 		AutoBypasses:   autoPeers,
 		Applications:   append([]string(nil), configuredApplications...),
+		ICMPDirect:     cfg.ICMPDirect,
 	}
 	if err := saveState(state); err != nil {
 		return err
@@ -274,7 +275,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 			return fmt.Errorf("add bypass route for %s: %w", route.Target, err)
 		}
 	}
-	if len(cfg.Applications) > 0 {
+	if len(cfg.Applications) > 0 || cfg.ICMPDirect {
 		for _, route := range routesWithPhysicalSources(
 			directScopedRoutes(gateway4, gateway6, iface, iface6, cfg.IPv6),
 			initialPhysicalRoute,
@@ -327,6 +328,9 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		} else {
 			fmt.Fprintf(a.out, "shared system DNS keeps its configured path (loopback resolvers stay local; external resolvers stay direct via %s) so unselected applications keep their normal resolver path\n", iface)
 		}
+	}
+	if cfg.ICMPDirect {
+		fmt.Fprintf(a.out, "direct ICMP echo forwarding is active on %s; ICMP from all applications bypasses SOCKS5\n", iface)
 	}
 	if len(autoPeers) > 0 {
 		fmt.Fprintf(a.out, "auto-bypassed %d current proxy peer(s): %s\n", len(autoPeers), strings.Join(autoPeers, ", "))
@@ -389,7 +393,7 @@ activeLoop:
 					}
 					fmt.Fprintf(
 						a.out,
-						"network update: %s; suspended %d owned route(s), cleared the physical source, and closed %d egress connection(s); applications now use the system network until recovery\n",
+						"network update: %s; suspended %d owned route(s), cleared the physical source, and closed %d egress flow(s); applications now use the system network until recovery\n",
 						networkUnavailable,
 						suspended,
 						closed,
@@ -418,7 +422,7 @@ activeLoop:
 							break activeLoop
 						}
 					}
-					fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress connection(s) and restored %d TUN capture route(s)\n", closed, resumed)
+					fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress flow(s) and restored %d TUN capture route(s)\n", closed, resumed)
 					continue
 				}
 				returnErr = fmt.Errorf("physical network reconciliation failed; stopping TUN to restore normal networking: %w", reconcileErr)
@@ -601,6 +605,8 @@ func (a *App) startEngine(
 		Applications:     append([]string(nil), cfg.Applications...),
 		ProxyUDP:         capabilities.UDP,
 		TrustedDNS:       cfg.TrustedDNS,
+		IPv6:             cfg.IPv6,
+		ICMPDirect:       cfg.ICMPDirect,
 		MTU:              cfg.MTU,
 		LogLevel:         cfg.LogLevel,
 	}
@@ -1161,6 +1167,9 @@ func (a *App) Status() error {
 	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
 	if len(state.Applications) > 0 {
 		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))
+	}
+	if state.ICMPDirect {
+		fmt.Fprintln(a.out, "ICMP echo: direct via physical interface (bypasses SOCKS5)")
 	}
 	counts := make(map[string]int)
 	for _, route := range state.Routes {

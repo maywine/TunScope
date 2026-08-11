@@ -21,6 +21,7 @@ type Config struct {
 	IPv6         bool     `json:"ipv6"`
 	TCPOnly      bool     `json:"tcpOnly,omitempty"`
 	TrustedDNS   string   `json:"trustedDNS,omitempty"`
+	ICMPDirect   bool     `json:"icmpDirect"`
 }
 
 func DefaultConfig() Config {
@@ -30,6 +31,7 @@ func DefaultConfig() Config {
 		LogLevel:   "info",
 		AutoBypass: false,
 		IPv6:       true,
+		ICMPDirect: true,
 	}
 }
 
@@ -43,6 +45,8 @@ type EngineConfig struct {
 	Applications     []string `json:"applications,omitempty"`
 	ProxyUDP         bool     `json:"proxyUDP"`
 	TrustedDNS       string   `json:"trustedDNS,omitempty"`
+	IPv6             bool     `json:"ipv6"`
+	ICMPDirect       bool     `json:"icmpDirect"`
 	MTU              int      `json:"mtu"`
 	LogLevel         string   `json:"logLevel"`
 }
@@ -131,4 +135,5 @@ type State struct {
 	RouteReconcile  *RouteReconcileJournal `json:"routeReconcile,omitempty"`
 	AutoBypasses    []string               `json:"autoBypasses,omitempty"`
 	Applications    []string               `json:"applications,omitempty"`
+	ICMPDirect      bool                   `json:"icmpDirect,omitempty"`
 }

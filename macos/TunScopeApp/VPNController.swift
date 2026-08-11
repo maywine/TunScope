@@ -24,6 +24,9 @@ final class TunController: ObservableObject {
     @Published var tcpOnly = true {
         didSet { UserDefaults.standard.set(tcpOnly, forKey: "tcpOnly") }
     }
+    @Published var icmpDirect = true {
+        didSet { UserDefaults.standard.set(icmpDirect, forKey: "icmpDirect") }
+    }
     @Published private(set) var applications: [TargetApplication] = []
     @Published private(set) var status: TunServiceStatus = .stopped
     @Published var lastError: String?
@@ -232,7 +235,8 @@ final class TunController: ObservableObject {
             autoBypass: true,
             ipv6: true,
             tcpOnly: tcpOnly,
-            trustedDNS: "8.8.8.8:53"
+            trustedDNS: "8.8.8.8:53",
+            icmpDirect: icmpDirect
         )
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("tunscope-\(UUID().uuidString).json")
@@ -369,6 +373,9 @@ final class TunController: ObservableObject {
         if UserDefaults.standard.object(forKey: "tcpOnly") != nil {
             tcpOnly = UserDefaults.standard.bool(forKey: "tcpOnly")
         }
+        if UserDefaults.standard.object(forKey: "icmpDirect") != nil {
+            icmpDirect = UserDefaults.standard.bool(forKey: "icmpDirect")
+        }
         guard let data = UserDefaults.standard.data(forKey: "targetApplications"),
               let saved = try? JSONDecoder().decode([TargetApplication].self, from: data) else { return }
         applications = saved.filter { FileManager.default.fileExists(atPath: $0.applicationPath) }
@@ -385,6 +392,7 @@ private struct HelperConfig: Encodable {
     let ipv6: Bool
     let tcpOnly: Bool
     let trustedDNS: String
+    let icmpDirect: Bool
 }
 
 private struct ProcessResult: Sendable {

@@ -303,7 +303,7 @@ func managedPhysicalPurpose(purpose string) bool {
 
 func physicalRoutesForSnapshot(cfg Config, snapshot physicalRouteSnapshot, bypasses []netip.Prefix, dnsServers []netip.Addr) []Route {
 	routes := bypassRoutes(bypasses, snapshot.Gateway4, snapshot.Gateway6, snapshot.Interface, snapshot.Interface6)
-	if len(cfg.Applications) == 0 {
+	if len(cfg.Applications) == 0 && !cfg.ICMPDirect {
 		return routesWithPhysicalSources(routes, snapshot)
 	}
 	routes = append(routes, directScopedRoutes(
@@ -313,6 +313,9 @@ func physicalRoutesForSnapshot(cfg Config, snapshot physicalRouteSnapshot, bypas
 		snapshot.Interface6,
 		cfg.IPv6,
 	)...)
+	if len(cfg.Applications) == 0 {
+		return routesWithPhysicalSources(routes, snapshot)
+	}
 	if strings.TrimSpace(cfg.TrustedDNS) != "" {
 		return routesWithPhysicalSources(routes, snapshot)
 	}

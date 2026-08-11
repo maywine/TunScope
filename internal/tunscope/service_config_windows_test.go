@@ -71,7 +71,7 @@ func TestDecodeWindowsServiceConfigAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaults := DefaultConfig()
-	if cfg.Device != defaults.Device || cfg.MTU != defaults.MTU || cfg.LogLevel != defaults.LogLevel || cfg.IPv6 != defaults.IPv6 || cfg.TrustedDNS != defaults.TrustedDNS {
+	if cfg.Device != defaults.Device || cfg.MTU != defaults.MTU || cfg.LogLevel != defaults.LogLevel || cfg.IPv6 != defaults.IPv6 || cfg.TrustedDNS != defaults.TrustedDNS || cfg.ICMPDirect != defaults.ICMPDirect {
 		t.Fatalf("decoded defaults = %#v, want values from %#v", cfg, defaults)
 	}
 }

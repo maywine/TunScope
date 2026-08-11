@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMach
 
 从解压目录打开 TunScope，确认 UAC 提权。GUI 可以：
 
-- 保存 SOCKS5、可选 trusted DNS、IPv6、MTU、绕行节点和日志级别；trusted DNS 留空时使用 Windows 当前系统 DNS。
+- 保存 SOCKS5、可选 trusted DNS、IPv6、ICMP 直连、MTU、绕行节点和日志级别；trusted DNS 留空时使用 Windows 当前系统 DNS。
 - 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
 - 无需安装服务即可启动、停止、保存并重启 TUN。
 - 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
@@ -179,6 +179,8 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 
 应用路径必须是绝对路径。JSON 中的反斜杠必须写成 `\\`。
 
+`icmpDirect` 默认是 `true`。启用后，TunScope 使用管理员 raw socket 把未分片的 IPv4/IPv6 Echo Request 绑定到物理网卡发送，并将 Echo Reply 或相关 ICMP 错误恢复原 ID、地址和校验和后注入 Wintun。该流量不经过 SOCKS5，且对所有应用生效；需要严格隐藏物理出口时设为 `false`。
+
 ## DNS
 
 GUI 默认不填写“可信 DNS”。留空时，TunScope 保留 Windows 当前系统 DNS 路径；只有显式填写外部 DNS 地址时，才会把进入 TUN 的 DNS 流量经 SOCKS5 发往该地址。
@@ -205,6 +207,7 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 - `down` 使用随机命名停止事件通知前台 owner；不会向 PID 盲目发送信号。
 - 引擎配置通过继承管道传递，代理用户名和密码不会出现在引擎参数或状态文件中。
 - 自动网络模式检测到物理默认路由消失，或同一网卡的网关/主 IPv4 发生变化时，会立即删除 TunScope 自己创建的捕获、DNS 和绕行路由，清除 engine 中的旧直连源地址并关闭旧连接，但保留 Windows Service/owner、engine 和 Wintun 设备；暂停期间所有应用使用 Windows 系统路由，让 DHCP、本地 SOCKS5 和其他 VPN 先独立恢复。
+- 同一失效/恢复事务也会关闭 ICMP raw socket、清空全部临时 ID 映射，并在物理路径复核通过后重新绑定；旧网络返回的延迟响应不会注入新网络会话。
 - 新物理网络出现后，TunScope 会等待接口、网关、主 IPv4 和 DNS 连续 3 次保持一致，只重建物理绕行/DNS 路由并验证 `ActiveStore`；下一轮会再次确认默认路由、首选源地址和自有物理路由没有被 Windows 的网卡切换收尾流程删除。验证通过后才向 engine 发布新源地址并恢复 TUN 捕获路由。
 - 完全没有可用物理路由持续 30 秒，或新物理路由出现后持续 10 秒仍无法重建/验证时，TunScope 会安全停止并清理自身路由，避免影响其他应用。DNS-only 变化会原位更新，不暂停 TUN。该恢复策略以系统可用性优先，因此切换期间名单内应用存在短暂直连窗口。
 - 如果系统切换到了另一块物理网卡，当前版本会安全删除路由并停止；确认新网卡联网后重新执行 `up`。
@@ -217,5 +220,6 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 - 当前发布目标是 Windows x64；ARM64、MSI/完整卸载器、系统托盘和 Microsoft Authenticode 代码签名尚未完成。
 - 按应用识别使用 Windows IP Helper TCP/UDP owner-PID 表。非常短暂、尚未出现在系统表中的流量会优先保持直连，以免影响名单外应用；确认属于引擎自身或存在冲突的流量会阻断。
 - Windows 共享 DNS 服务无法提供严格的逐应用 DNS 归属。需要稳定、防污染的解析时使用本地 `dnscrypt-proxy`，不要把共享系统 DNS 全部假定为某个名单内应用。
+- ICMP 没有可供 IP Helper 可靠映射进程的 TCP/UDP 端口元组，所以 `icmpDirect` 是全机开关，不是按应用开关；它只覆盖 Echo 和与 Echo 对应的常见错误，不是通用 ICMP/VPN 数据面。
 - 只有同一物理网卡上的地址/网关切换能够自动暂停并恢复；切换到另一块网卡后，服务模式需要重新启动服务，便携 GUI 或前台 CLI 需要重新启动数据面。
 - 真实 Windows 机器上的 Wintun、代理程序和企业安全软件组合仍应逐项验证。

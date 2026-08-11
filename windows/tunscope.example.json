@@ -11,5 +11,6 @@
   "logLevel": "info",
   "autoBypass": false,
   "ipv6": true,
+  "icmpDirect": true,
   "trustedDNS": ""
 }

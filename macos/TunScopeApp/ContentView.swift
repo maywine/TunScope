@@ -73,6 +73,15 @@ struct ContentView: View {
                 Spacer()
             }
             .padding(.top, 4)
+            Toggle("ICMP 直连（让 ping 绕过 SOCKS5）", isOn: $controller.icmpDirect)
+                .disabled(controller.status == .active)
+            HStack {
+                Text("ICMP 没有可可靠匹配进程的端口信息；开启后，所有应用的 Echo 请求都会从物理接口直连，并在网络切换期间暂停。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.top, 4)
         }
     }
 
