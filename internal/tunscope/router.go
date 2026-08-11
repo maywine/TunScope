@@ -246,16 +246,13 @@ func (d *TrackedProxyDialer) RebindNetwork(string) (int, error) {
 	}
 	d.networkMu.Lock()
 	defer d.networkMu.Unlock()
-	if d.invalidated {
-		d.invalidated = false
-		return 0, nil
-	}
+	d.invalidated = false
 	return d.flows.reset(), nil
 }
 
 // InvalidateNetwork advances the flow generation as soon as the physical
-// route disappears. Recovery then only publishes the replacement source; it
-// must not close flows a second time after the new network becomes usable.
+// route disappears. Recovery resets again because flows can be recreated
+// while the physical route is unavailable and retain an unusable egress path.
 func (d *TrackedProxyDialer) InvalidateNetwork() (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("global proxy dialer is nil")
@@ -426,9 +423,9 @@ func (d *PerAppDialer) ResetConnections() int {
 }
 
 // RebindNetwork publishes the new physical source before advancing the flow
-// generation for a live change. If an unavailable interval already advanced
-// the generation, recovery only publishes the source so connections opened on
-// the replacement network are not closed a second time.
+// generation. It also resets after an unavailable interval: flows can be
+// recreated before the replacement route is ready and otherwise remain stuck
+// until their own TCP or UDP timeout expires.
 func (d *PerAppDialer) RebindNetwork(source4 string) (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("per-app dialer is nil")
@@ -442,10 +439,7 @@ func (d *PerAppDialer) RebindNetwork(source4 string) (int, error) {
 	if err := direct.setSource4(source4); err != nil {
 		return 0, err
 	}
-	if d.invalidated {
-		d.invalidated = false
-		return 0, nil
-	}
+	d.invalidated = false
 	return d.flows.reset(), nil
 }
 

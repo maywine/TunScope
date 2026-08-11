@@ -473,15 +473,18 @@ func TestFailedReconcileJournalCleansBothGatewayCandidates(t *testing.T) {
 }
 
 type liveMonitorRunner struct {
-	routeGateway string
-	routeIface   string
-	routeOutput  string
-	routeErr     error
-	dnsServer    string
-	dnsOutput    string
-	dnsErr       error
-	ipv4Address  string
-	calls        []string
+	routeGateway       string
+	routeIface         string
+	routeOutput        string
+	routeErr           error
+	scopedRouteGateway string
+	scopedRouteIface   string
+	scopedRouteErr     error
+	dnsServer          string
+	dnsOutput          string
+	dnsErr             error
+	ipv4Address        string
+	calls              []string
 }
 
 func (r *liveMonitorRunner) Run(name string, args ...string) (string, error) {
@@ -495,6 +498,20 @@ func (r *liveMonitorRunner) Run(name string, args ...string) (string, error) {
 			return r.routeOutput, nil
 		}
 		return fmt.Sprintf("gateway: %s\ninterface: %s\n", r.routeGateway, r.routeIface), nil
+	}
+	if name == "/sbin/route" && len(args) >= 5 && args[1] == "get" && args[2] == "-ifscope" {
+		if r.scopedRouteErr != nil {
+			return "", r.scopedRouteErr
+		}
+		gateway := r.scopedRouteGateway
+		if gateway == "" {
+			gateway = r.routeGateway
+		}
+		iface := r.scopedRouteIface
+		if iface == "" {
+			iface = r.routeIface
+		}
+		return fmt.Sprintf("gateway: %s\ninterface: %s\n", gateway, iface), nil
 	}
 	if name == "/usr/sbin/scutil" {
 		if r.dnsErr != nil {
@@ -566,9 +583,18 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 	}
 
 	runner.routeOutput = ""
-	updates, recoveryErr := monitor.poll(app, state, cfg)
-	if len(updates) != 1 || !strings.Contains(updates[0], "available again") {
-		t.Fatalf("first recovery update = %#v", updates)
+	var recoveryErr error
+	for i := 0; i < networkRecoverySampleCount+1; i++ {
+		updates, err := monitor.poll(app, state, cfg)
+		recoveryErr = err
+		switch {
+		case i == 0 && (len(updates) != 1 || !strings.Contains(updates[0], "available again")):
+			t.Fatalf("first recovery update = %#v", updates)
+		case i < networkRecoverySampleCount-1 && err != nil:
+			t.Fatalf("recovery poll %d returned before stability threshold: %v", i, err)
+		case i == networkRecoverySampleCount-1 && (err != nil || len(updates) != 1 || !strings.Contains(updates[0], "waiting one poll")):
+			t.Fatalf("route preparation poll = updates %#v, error %v", updates, err)
+		}
 	}
 	var change *physicalNetworkChangeError
 	if !errors.As(recoveryErr, &change) {
@@ -579,7 +605,101 @@ func TestMonitorKeepsTUNDuringTransientMissingDefaultRouteAndRecovers(t *testing
 	}
 }
 
-func TestMonitorDefersInvalidationUntilPreviousSourceDisappears(t *testing.T) {
+func TestMonitorRepairsScopedRoutesRemovedDuringRecoveryVerification(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &liveMonitorRunner{
+		routeGateway: "192.168.50.1",
+		routeIface:   "en0",
+		routeOutput:  "route to: default\n",
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  "192.168.50.37",
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+
+	_, unavailableErr := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, unavailableErr)
+	runner.routeOutput = ""
+	for i := 0; i < networkRecoverySampleCount; i++ {
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("route preparation poll %d: %v", i, err)
+		}
+	}
+	if monitor.recoveryPrepared == "" {
+		t.Fatal("recovery routes were not marked prepared")
+	}
+
+	runner.scopedRouteErr = errors.New("route: writing to routing socket: not in table")
+	updates, err := monitor.poll(app, state, cfg)
+	if err != nil {
+		t.Fatalf("a flushed scoped route stopped TUN immediately: %v", err)
+	}
+	if len(updates) != 1 || !strings.Contains(updates[0], "removed a replacement scoped route") {
+		t.Fatalf("scoped-route flush update = %#v", updates)
+	}
+	if monitor.recoveryPrepared != "" {
+		t.Fatal("flushed scoped routes remained marked prepared")
+	}
+
+	runner.scopedRouteErr = nil
+	updates, err = monitor.poll(app, state, cfg)
+	if err != nil || len(updates) != 1 || !strings.Contains(updates[0], "waiting one poll") {
+		t.Fatalf("route repair poll = updates %#v, error %v", updates, err)
+	}
+	_, recoveryErr := monitor.poll(app, state, cfg)
+	var change *physicalNetworkChangeError
+	if !errors.As(recoveryErr, &change) {
+		t.Fatalf("repaired recovery error = %v, want physicalNetworkChangeError", recoveryErr)
+	}
+}
+
+func TestMonitorStopsWhenReplacementScopedRoutesRemainUnusable(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &liveMonitorRunner{
+		routeGateway:   "192.168.50.1",
+		routeIface:     "en0",
+		routeOutput:    "route to: default\n",
+		dnsServer:      "1.1.1.1",
+		ipv4Address:    "192.168.50.37",
+		scopedRouteErr: errors.New("route: writing to routing socket: not in table"),
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+
+	_, unavailableErr := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, unavailableErr)
+	runner.routeOutput = ""
+	for i := 0; i < networkRecoverySampleCount; i++ {
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("recovery preparation poll %d: %v", i, err)
+		}
+	}
+	now = now.Add(networkRecoveryGrace)
+	_, err := monitor.poll(app, state, cfg)
+	if err == nil || !strings.Contains(err.Error(), "replacement physical routes remained unusable") {
+		t.Fatalf("expired scoped-route recovery error = %v", err)
+	}
+}
+
+func TestMonitorPausesImmediatelyEvenIfPreviousSourceRemainsAssigned(t *testing.T) {
 	cfg := reconcileTestConfig()
 	before := physicalRouteSnapshot{
 		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
@@ -593,18 +713,12 @@ func TestMonitorDefersInvalidationUntilPreviousSourceDisappears(t *testing.T) {
 	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
 
 	updates, err := monitor.poll(app, state, cfg)
-	if err != nil {
-		t.Fatalf("route gap with an assigned source requested invalidation: %v", err)
-	}
-	if len(updates) != 2 || !strings.Contains(updates[1], "remains assigned") {
+	requireNetworkUnavailableSignal(t, err)
+	if len(updates) != 1 || !strings.Contains(updates[0], "pausing TUN capture") {
 		t.Fatalf("assigned-source updates = %#v", updates)
 	}
-
-	runner.ipv4Address = "192.168.50.37"
-	_, err = monitor.poll(app, state, cfg)
-	requireNetworkUnavailableSignal(t, err)
-	if !monitor.sourceInvalidated {
-		t.Fatal("source invalidation was not recorded")
+	if !monitor.routeUnavailable || !monitor.recoveryPending {
+		t.Fatalf("route gap was not recorded: %#v", monitor)
 	}
 }
 
@@ -847,12 +961,18 @@ func TestMonitorRefreshesRoutesAndRebindsAfterSameNetworkReturns(t *testing.T) {
 	monitor := newLiveNetworkMonitor(snapshot, nil, nil, nil, false, true, false, 0)
 
 	for i := 0; i < networkStableSampleCount+1; i++ {
-		if _, err := monitor.poll(app, state, cfg); err != nil {
+		_, err := monitor.poll(app, state, cfg)
+		if i == 0 {
+			requireNetworkUnavailableSignal(t, err)
+		} else if err != nil {
 			t.Fatalf("missing-route poll %d stopped TUN: %v", i, err)
 		}
 	}
 	runner.routeOutput = ""
-	_, recoveryErr := monitor.poll(app, state, cfg)
+	var recoveryErr error
+	for i := 0; i < networkRecoverySampleCount+1; i++ {
+		_, recoveryErr = monitor.poll(app, state, cfg)
+	}
 	var change *physicalNetworkChangeError
 	if !errors.As(recoveryErr, &change) {
 		t.Fatalf("same-network recovery error = %v, want physicalNetworkChangeError", recoveryErr)

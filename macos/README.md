@@ -55,7 +55,7 @@ sudo /path/to/TunScope.app/Contents/Resources/tunscope down
 
 GUI 通过一个短生命周期的管理员 launcher，在独立 session/process group 中启动长期运行的 owner；owner 随后启动的 engine 会继承该 session/process group。因此 macOS 回收空闲的 `authtrampoline` 授权服务时，不会向 TUN 进程传递生命周期信号。命令行直接执行 `sudo tunscope up` 时仍保持前台运行，并支持 `Ctrl-C` 清理。
 
-自动网络监控在物理路由消失并确认旧主 IPv4 已从网卡移除时，会立即清除 engine 中已经失效的直连源地址并关闭旧连接，但保留 TUN 捕获路由；如果旧地址仍在，则不会仅因短暂路由空窗打断连接。DHCP 返回首个包含网关、接口和主 IPv4 的完整快照后，会立即刷新物理路由并发布新源地址，不再等待第二轮采样。物理网络不可用的 30 秒保护超时只在 Mac 完整唤醒时累计；睡眠和暗唤醒阶段会暂停计时，恢复完整唤醒后继续。这样不会因为合盖、夜间暗唤醒或唤醒时的长采样间隔误停 TUN，同时在用户实际使用期间持续断网 30 秒后仍会安全退出并清理路由。
+自动网络监控在物理路由消失时，会立即撤下 TunScope 安装的捕获、绕行和 scoped 路由，清除 engine 的直连源地址并关闭旧连接，但保留 owner、engine 和 `utun` 设备；这段时间所有应用使用 macOS 系统路由，先让 DHCP、Trojan、corplink 等传输恢复。DHCP 返回后，TunScope 会等待网关、接口和主 IPv4 连续稳定，重建物理 scoped 路由，并在下一轮确认 macOS 没有于切换末期再次清掉它们；发现缺失会自动重建，持续 10 秒仍不可用则安全停止 TUN。核验通过后才给 engine 发布新源地址并恢复 TUN 捕获。物理网络完全不可用的 30 秒保护超时只在 Mac 完整唤醒时累计；睡眠和暗唤醒阶段会暂停计时，恢复完整唤醒后继续。该策略以可用性优先，因此 Wi‑Fi 切换期间选中应用存在短暂直连窗口。
 
 本次会话日志保存在 `/Library/Logs/TunScope/tunscope.log`。再次启动前，GUI 会轮转并保留最近五份历史日志：`tunscope.1.log` 是上一轮，`tunscope.5.log` 最旧。旧版本留下的 `tunscope.previous.log` 会在首次启动新版时迁移进轮转序列；所有日志都只允许启动 TunScope 的本机用户读取（权限 `0600`）。
 

@@ -25,15 +25,16 @@ const (
 // by the Windows service controller and GUI. Proxy credentials are never
 // present because the persisted runtime state already stores a redacted URL.
 type WindowsRuntimeStatus struct {
-	Status       string `json:"status"`
-	Detail       string `json:"detail,omitempty"`
-	Phase        string `json:"phase,omitempty"`
-	Proxy        string `json:"proxy,omitempty"`
-	Device       string `json:"device,omitempty"`
-	Interface    string `json:"interface,omitempty"`
-	OwnerPID     int    `json:"ownerPid,omitempty"`
-	EnginePID    int    `json:"enginePid,omitempty"`
-	Applications int    `json:"applications,omitempty"`
+	Status          string `json:"status"`
+	Detail          string `json:"detail,omitempty"`
+	Phase           string `json:"phase,omitempty"`
+	Proxy           string `json:"proxy,omitempty"`
+	Device          string `json:"device,omitempty"`
+	Interface       string `json:"interface,omitempty"`
+	OwnerPID        int    `json:"ownerPid,omitempty"`
+	EnginePID       int    `json:"enginePid,omitempty"`
+	Applications    int    `json:"applications,omitempty"`
+	RoutesSuspended bool   `json:"routesSuspended,omitempty"`
 }
 
 func WindowsServiceDirectory() string {
@@ -275,14 +276,15 @@ func ReadWindowsRuntimeStatus() WindowsRuntimeStatus {
 		status = "active"
 	}
 	return WindowsRuntimeStatus{
-		Status:       status,
-		Detail:       detail,
-		Phase:        state.Phase,
-		Proxy:        state.Proxy,
-		Device:       state.Device,
-		Interface:    state.Interface,
-		OwnerPID:     state.OwnerPID,
-		EnginePID:    state.EnginePID,
-		Applications: len(state.Applications),
+		Status:          status,
+		Detail:          detail,
+		Phase:           state.Phase,
+		Proxy:           state.Proxy,
+		Device:          state.Device,
+		Interface:       state.Interface,
+		OwnerPID:        state.OwnerPID,
+		EnginePID:       state.EnginePID,
+		Applications:    len(state.Applications),
+		RoutesSuspended: state.RoutesSuspended,
 	}
 }

@@ -226,8 +226,8 @@ func TestTrackedProxyDialerRebindClosesGlobalFlow(t *testing.T) {
 	}
 }
 
-func TestTrackedProxyDialerInvalidationDoesNotResetRecoveredFlowTwice(t *testing.T) {
-	pipes := &pipeDialer{peers: make(chan net.Conn, 2)}
+func TestTrackedProxyDialerRecoveryClosesFlowOpenedWhileUnavailable(t *testing.T) {
+	pipes := &pipeDialer{peers: make(chan net.Conn, 3)}
 	d := &TrackedProxyDialer{socks: pipes}
 	first, err := d.DialContext(context.Background(), &M.Metadata{
 		Network: M.TCP,
@@ -249,7 +249,7 @@ func TestTrackedProxyDialerInvalidationDoesNotResetRecoveredFlowTwice(t *testing
 		t.Fatalf("flows closed at invalidation = %d, want 1", closed)
 	}
 
-	recovered, err := d.DialContext(context.Background(), &M.Metadata{
+	gapFlow, err := d.DialContext(context.Background(), &M.Metadata{
 		Network: M.TCP,
 		DstIP:   netip.MustParseAddr("203.0.113.21"),
 		DstPort: 443,
@@ -257,17 +257,34 @@ func TestTrackedProxyDialerInvalidationDoesNotResetRecoveredFlowTwice(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recovered.Close()
-	recoveredPeer := <-pipes.peers
-	defer recoveredPeer.Close()
+	defer gapFlow.Close()
+	gapPeer := <-pipes.peers
+	defer gapPeer.Close()
 
 	closed, err = d.RebindNetwork("192.168.50.37")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if closed != 0 {
-		t.Fatalf("flows closed again at recovery = %d, want 0", closed)
+	if closed != 1 {
+		t.Fatalf("flows closed at recovery = %d, want 1", closed)
 	}
+	buffer := make([]byte, 1)
+	if _, err := gapPeer.Read(buffer); err == nil {
+		t.Fatal("flow opened while unavailable remained open after recovery")
+	}
+
+	stable, err := d.DialContext(context.Background(), &M.Metadata{
+		Network: M.TCP,
+		DstIP:   netip.MustParseAddr("203.0.113.22"),
+		DstPort: 443,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stable.Close()
+	stablePeer := <-pipes.peers
+	defer stablePeer.Close()
+
 	closed, err = d.RebindNetwork("192.168.60.37")
 	if err != nil {
 		t.Fatal(err)

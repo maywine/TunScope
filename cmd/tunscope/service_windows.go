@@ -409,6 +409,9 @@ func controlWindowsService(command string, args []string, stdout, stderr io.Writ
 			return encoder.Encode(status)
 		}
 		fmt.Fprintf(stdout, "service: %s\nstartup: %s\nconfig: %t (%s)\nruntime: %s\nlog: %s\n", status.State, status.Startup, status.ConfigReady, status.ConfigPath, status.Runtime.Status, status.LogPath)
+		if status.Runtime.RoutesSuspended {
+			fmt.Fprintln(stdout, "TUN capture: suspended while the physical network recovers")
+		}
 		if status.ConfigError != "" {
 			fmt.Fprintf(stdout, "config error: %s\n", status.ConfigError)
 		}

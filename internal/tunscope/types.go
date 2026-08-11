@@ -127,6 +127,7 @@ type State struct {
 	Gateway4        string                 `json:"gateway4"`
 	Gateway6        string                 `json:"gateway6,omitempty"`
 	Routes          []Route                `json:"routes"`
+	RoutesSuspended bool                   `json:"routesSuspended,omitempty"`
 	RouteReconcile  *RouteReconcileJournal `json:"routeReconcile,omitempty"`
 	AutoBypasses    []string               `json:"autoBypasses,omitempty"`
 	Applications    []string               `json:"applications,omitempty"`

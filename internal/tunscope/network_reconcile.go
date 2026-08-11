@@ -14,9 +14,10 @@ import (
 const (
 	networkStableSampleCount   = 3
 	addressStableSampleCount   = 2
-	networkRecoverySampleCount = 1
+	networkRecoverySampleCount = networkStableSampleCount
 	proxyPeerPollEvery         = 4
 	networkUnavailableGrace    = 30 * time.Second
+	networkRecoveryGrace       = 10 * time.Second
 )
 
 var networkPollInterval = 750 * time.Millisecond
@@ -32,8 +33,8 @@ type physicalRouteSnapshot struct {
 }
 
 // physicalNetworkChangeError tells the owner that physical routes have already
-// been reconciled and the engine's old TCP/UDP flows must now be rebound. The
-// owner deliberately keeps the TUN interface and broad capture routes up.
+// been reconciled and verified, so the engine can publish the new source and
+// the owner can restore capture routes suspended during the handoff.
 type physicalNetworkChangeError struct {
 	Description string
 	Source4     string
@@ -43,9 +44,9 @@ func (e *physicalNetworkChangeError) Error() string {
 	return e.Description
 }
 
-// physicalNetworkUnavailableSignal tells the owner to invalidate the engine's
-// old physical source immediately while the monitor keeps the TUN and capture
-// routes alive. It is emitted once per unavailable interval.
+// physicalNetworkUnavailableSignal tells the owner to suspend its routes and
+// invalidate the engine's physical source. It is emitted once per unavailable
+// interval so the system routing table stays unmodified until recovery.
 type physicalNetworkUnavailableSignal struct {
 	Description string
 }
@@ -57,8 +58,8 @@ func (e *physicalNetworkUnavailableSignal) Error() string {
 // physicalRouteUnavailableError marks sampling failures that are expected
 // while macOS is disassociating from one Wi-Fi network and acquiring another.
 // There is no useful route to restore during this interval, so the owner keeps
-// the TUN data plane alive and retries until a complete physical snapshot is
-// available again.
+// the TUN process alive but suspends its routes until a complete physical
+// snapshot is available again.
 type physicalRouteUnavailableError struct {
 	err error
 }
@@ -217,22 +218,6 @@ func interfaceAddresses(r commandRunner, iface string) ([]string, []string, erro
 	return ipv4, ipv6, nil
 }
 
-func physicalSourceAssigned(r commandRunner, snapshot physicalRouteSnapshot) (bool, error) {
-	if snapshot.Interface == "" || snapshot.Source4 == "" {
-		return false, nil
-	}
-	ipv4, _, err := interfaceAddresses(r, snapshot.Interface)
-	if err != nil {
-		return false, err
-	}
-	for _, address := range ipv4 {
-		if address == snapshot.Source4 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // stableObservation keeps transient route/DNS/peer snapshots from causing
 // routing mutations. Its applied signature is advanced only after the caller
 // commits the corresponding route/state transaction.
@@ -357,6 +342,68 @@ func routesWithPhysicalSources(routes []Route, snapshot physicalRouteSnapshot) [
 		}
 	}
 	return result
+}
+
+func routeProbeAddress(target string) (string, error) {
+	prefix, err := netip.ParsePrefix(target)
+	if err != nil {
+		addr, addrErr := netip.ParseAddr(target)
+		if addrErr != nil {
+			return "", fmt.Errorf("parse route target %q: %w", target, addrErr)
+		}
+		return addr.String(), nil
+	}
+	addr := prefix.Masked().Addr()
+	// Avoid probing the network address and, for 198.18.0.0/15, TunScope's
+	// own 198.18.0.1 gateway. Every direct-scope prefix is large enough for
+	// two increments.
+	for range 2 {
+		next := addr.Next()
+		if !next.IsValid() || !prefix.Contains(next) {
+			break
+		}
+		addr = next
+	}
+	return addr.String(), nil
+}
+
+// verifyDirectScopedRoutes checks the route table through the same interface
+// scope used by IP_BOUND_IF sockets. A Wi-Fi handoff can publish its new
+// default route and then flush manually-added scoped routes a moment later;
+// successful route(8) mutations alone therefore do not prove that direct
+// sockets can leave through the replacement network.
+func verifyDirectScopedRoutes(r commandRunner, routes []Route) error {
+	for _, managed := range routes {
+		if managed.Purpose != "direct-scope" || managed.Family != "inet" {
+			continue
+		}
+		if managed.Scope == "" || managed.Gateway == "" {
+			return fmt.Errorf("direct route %s lacks an interface scope or gateway", managed.Target)
+		}
+		probe, err := routeProbeAddress(managed.Target)
+		if err != nil {
+			return err
+		}
+		out, err := r.Run("/sbin/route", "-n", "get", "-ifscope", managed.Scope, probe)
+		if err != nil {
+			return fmt.Errorf("lookup scoped route %s on %s: %w", managed.Target, managed.Scope, err)
+		}
+		gateway, iface, err := parseRouteGet(out)
+		if err != nil {
+			return fmt.Errorf("parse scoped route %s on %s: %w", managed.Target, managed.Scope, err)
+		}
+		if gateway != managed.Gateway || iface != managed.Scope {
+			return fmt.Errorf(
+				"scoped route %s resolved through %s on %s, want %s on %s",
+				managed.Target,
+				gateway,
+				iface,
+				managed.Gateway,
+				managed.Scope,
+			)
+		}
+	}
+	return nil
 }
 
 type routeChange struct {
@@ -713,7 +760,8 @@ type liveNetworkMonitor struct {
 	routeSampleFullWake bool
 	routeTimeoutPaused  bool
 	recoveryPending     bool
-	sourceInvalidated   bool
+	recoveryPrepared    string
+	recoveryStartedAt   time.Time
 	dnsUnavailable      bool
 	now                 func() time.Time
 	fullWake            func() bool
@@ -753,9 +801,9 @@ func newLiveNetworkMonitor(
 			addressStableSampleCount,
 			observationSignature(route.signature(), nil),
 		),
-		// samplePhysicalRoute already returns an atomic gateway/interface/source
-		// snapshot. After an explicit unavailable gap, the first complete snapshot
-		// is therefore safe to apply without waiting for a duplicate sample.
+		// macOS can publish a complete gateway/interface/source snapshot before
+		// its Wi-Fi route flush has finished. Require repeated observations and
+		// then verify the refreshed scoped routes on a later poll.
 		recoveryObservation: newStableObservation(networkRecoverySampleCount, ""),
 		dnsObservation: newStableObservation(
 			networkStableSampleCount,
@@ -823,9 +871,10 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			firstUnavailable := !m.routeUnavailable
 			if firstUnavailable {
 				m.resetUnavailableTime()
-				m.sourceInvalidated = false
+				m.recoveryPrepared = ""
+				m.recoveryStartedAt = time.Time{}
 				updates = append(updates, fmt.Sprintf(
-					"physical network temporarily unavailable; keeping TUN capture active while waiting: %v",
+					"physical network temporarily unavailable; pausing TUN capture until recovery: %v",
 					unavailable,
 				))
 				if !fullWake {
@@ -856,38 +905,26 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 					unavailable,
 				)
 			}
-			if !m.sourceInvalidated {
-				sourceAssigned, assignmentErr := physicalSourceAssigned(a.runner, m.route)
-				switch {
-				case assignmentErr != nil && firstUnavailable:
-					updates = append(updates, fmt.Sprintf(
-						"could not verify whether previous physical IPv4 source %s is still assigned; deferring engine invalidation: %v",
-						m.route.Source4,
-						assignmentErr,
-					))
-				case sourceAssigned && firstUnavailable:
-					updates = append(updates, fmt.Sprintf(
-						"previous physical IPv4 source %s remains assigned; deferring engine invalidation",
-						m.route.Source4,
-					))
-				case assignmentErr == nil && !sourceAssigned:
-					m.sourceInvalidated = true
-					return updates, &physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
-						"physical network became unavailable; invalidating stale direct source %s",
-						m.route.Source4,
-					)}
-				}
+			if firstUnavailable {
+				return updates, &physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
+					"physical network became unavailable; suspending owned routes and invalidating direct source %s",
+					m.route.Source4,
+				)}
 			}
 			return updates, nil
 		}
 	} else if m.routeUnavailable {
 		m.routeUnavailable = false
 		m.resetUnavailableTime()
-		m.sourceInvalidated = false
+		m.recoveryPrepared = ""
+		m.recoveryStartedAt = m.now()
 		updates = append(updates, "physical network is available again; validating the replacement route")
 	}
 	if routeErr == nil && m.recoveryPending {
 		recoverySignature := observationSignature(route.signature(), nil)
+		if m.recoveryPrepared != "" && m.recoveryPrepared != recoverySignature {
+			m.recoveryPrepared = ""
+		}
 		if !m.recoveryObservation.observe(recoverySignature) {
 			return updates, nil
 		}
@@ -901,16 +938,36 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		if err != nil {
 			return updates, fmt.Errorf("resolve current bypass routes: %w", err)
 		}
-		if err := a.reconcilePhysicalRoutesWithRefresh(
-			state,
-			cfg,
-			route,
-			bypasses,
-			m.dnsServers,
-			m.autoPeers,
-			true,
-		); err != nil {
-			return updates, err
+		if m.recoveryPrepared == "" {
+			if err := a.reconcilePhysicalRoutesWithRefresh(
+				state,
+				cfg,
+				route,
+				bypasses,
+				m.dnsServers,
+				m.autoPeers,
+				true,
+			); err != nil {
+				return updates, err
+			}
+			if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
+				if !m.recoveryStartedAt.IsZero() && m.now().Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
+					return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
+				}
+				updates = append(updates, fmt.Sprintf("replacement physical routes are not ready; retrying without rebinding applications: %v", err))
+				return updates, nil
+			}
+			m.recoveryPrepared = recoverySignature
+			updates = append(updates, "replacement physical routes refreshed; waiting one poll to verify that macOS keeps the scoped routes")
+			return updates, nil
+		}
+		if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
+			m.recoveryPrepared = ""
+			if !m.recoveryStartedAt.IsZero() && m.now().Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
+				return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
+			}
+			updates = append(updates, fmt.Sprintf("macOS removed a replacement scoped route during handoff verification; scheduling another refresh: %v", err))
+			return updates, nil
 		}
 		change := &physicalNetworkChangeError{
 			Description: fmt.Sprintf(
@@ -925,6 +982,8 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		}
 		m.route = route
 		m.recoveryPending = false
+		m.recoveryPrepared = ""
+		m.recoveryStartedAt = time.Time{}
 		m.recoveryObservation.commit(recoverySignature)
 		m.addressObservation.commit(observationSignature(route.signature(), nil))
 		m.routeObservation.commit(observationSignature(route.signature(), nil))

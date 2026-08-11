@@ -554,9 +554,12 @@ public partial class MainWindow : Window
     private void UpdateStatusDisplay(ServiceStatus status)
     {
         var runtime = status.Runtime?.Status ?? "stopped";
+        var recovering = status.Runtime?.RoutesSuspended == true;
         var title = status.Installed
             ? "检测到旧版 Windows Service"
-            : $"TUN：{TranslateRuntime(runtime)}";
+            : recovering
+                ? "TUN：等待网络恢复"
+                : $"TUN：{TranslateRuntime(runtime)}";
         var details = new List<string>
         {
             status.ConfigReady ? "配置已就绪" : "配置尚未保存"
@@ -577,6 +580,10 @@ public partial class MainWindow : Window
         {
             details.Add($"物理网卡 {status.Runtime.Interface}");
         }
+        if (recovering)
+        {
+            details.Add("捕获路由已暂停，当前使用 Windows 系统网络");
+        }
         if (!string.IsNullOrWhiteSpace(status.Runtime?.Detail))
         {
             details.Add(status.Runtime.Detail);
@@ -586,7 +593,9 @@ public partial class MainWindow : Window
             details.Add($"配置错误：{status.ConfigError}");
         }
 
-        var kind = !status.Installed && runtime == "active"
+        var kind = recovering
+            ? StatusKind.Warning
+            : !status.Installed && runtime == "active"
             ? StatusKind.Success
             : status.Installed || runtime == "stale"
                 ? StatusKind.Warning
@@ -790,4 +799,7 @@ public sealed class RuntimeStatus
 
     [JsonPropertyName("ownerPid")]
     public int OwnerPid { get; set; }
+
+    [JsonPropertyName("routesSuspended")]
+    public bool RoutesSuspended { get; set; }
 }

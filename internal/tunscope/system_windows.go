@@ -124,6 +124,51 @@ func readWindowsPhysicalNetwork(r commandRunner, requestedInterface string, incl
 	return snapshot, nil
 }
 
+// verifyWindowsPhysicalNetwork proves that the replacement default route,
+// source address, and every TunScope-owned physical route survived beyond the
+// PowerShell command that created them. Windows can publish a new DHCP
+// snapshot before its adapter transition has finished flushing ActiveStore.
+func verifyWindowsPhysicalNetwork(r commandRunner, physical windowsPhysicalNetwork, routes []Route) error {
+	if physical.InterfaceIndex <= 0 {
+		return fmt.Errorf("invalid Windows physical interface index %d", physical.InterfaceIndex)
+	}
+	gateway, gatewayErr := netip.ParseAddr(physical.Gateway4)
+	if gatewayErr != nil || !gateway.Is4() || gateway.IsUnspecified() || gateway.IsLoopback() || gateway.IsLinkLocalUnicast() {
+		return fmt.Errorf("invalid Windows physical gateway %q", physical.Gateway4)
+	}
+	source, sourceErr := netip.ParseAddr(physical.Source4)
+	if sourceErr != nil || !source.Is4() || source.IsUnspecified() || source.IsLoopback() || source.IsLinkLocalUnicast() {
+		return fmt.Errorf("invalid Windows physical source %q", physical.Source4)
+	}
+
+	index := strconv.Itoa(physical.InterfaceIndex)
+	commands := []string{
+		"$ErrorActionPreference='Stop'",
+		"$default=@(Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -InterfaceIndex " + index + " -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq '" + gateway.String() + "' })",
+		"if ($default.Count -eq 0) { throw 'replacement IPv4 default route is missing' }",
+		"$source=@(Get-NetIPAddress -InterfaceIndex " + index + " -AddressFamily IPv4 -IPAddress '" + source.String() + "' -ErrorAction SilentlyContinue | Where-Object { $_.AddressState -eq 'Preferred' -and -not $_.SkipAsSource })",
+		"if ($source.Count -eq 0) { throw 'replacement IPv4 source address is not preferred' }",
+	}
+	for _, route := range routes {
+		if route.Purpose != "bypass" && route.Purpose != "dns-direct" {
+			continue
+		}
+		prefix, routeIndex, nextHop, err := windowsRouteParts(route)
+		if err != nil {
+			return err
+		}
+		commands = append(commands,
+			"$managed=@(Get-NetRoute -PolicyStore ActiveStore -DestinationPrefix '"+prefix+"' -InterfaceIndex "+strconv.Itoa(routeIndex)+" -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq '"+nextHop+"' })",
+			"if ($managed.Count -eq 0) { throw 'replacement TunScope physical route is missing' }",
+		)
+	}
+	commands = append(commands, "'ok'")
+	if _, err := runPowerShell(r, strings.Join(commands, "; ")); err != nil {
+		return fmt.Errorf("verify replacement Windows physical network: %w", err)
+	}
+	return nil
+}
+
 func configureWindowsTUN(r commandRunner, interfaceIndex, mtu int, includeIPv6 bool) error {
 	if interfaceIndex <= 0 {
 		return fmt.Errorf("invalid Wintun interface index %d", interfaceIndex)

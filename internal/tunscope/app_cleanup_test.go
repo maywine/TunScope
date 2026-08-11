@@ -120,6 +120,59 @@ func TestCleanupTreatsMissingRouteAsSuccess(t *testing.T) {
 	}
 }
 
+func TestSuspendAndResumeOwnedRoutesAroundNetworkRecovery(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	physical := Route{
+		Family: "inet", Kind: "net", Target: "1.0.0.0/8",
+		Gateway: "192.168.1.1", Scope: "en0", Purpose: "direct-scope",
+	}
+	bypass := Route{
+		Family: "inet", Kind: "host", Target: "203.0.113.9",
+		Gateway: "192.168.1.1", Purpose: "bypass",
+	}
+	tun := Route{Family: "inet", Kind: "net", Target: "8.0.0.0/5", Gateway: tunGateway4, Purpose: "tun"}
+	dns := Route{Family: "inet", Kind: "host", Target: "8.8.8.8", Gateway: tunGateway4, Purpose: "dns"}
+	state := cleanupTestState(physical, bypass, tun, dns)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cleanupRunner{}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+
+	removed, err := app.suspendOwnedRoutes(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 4 || !state.RoutesSuspended {
+		t.Fatalf("suspension removed %d routes, suspended=%v", removed, state.RoutesSuspended)
+	}
+	if len(runner.calls) != 4 || !strings.Contains(runner.calls[0], " delete ") || !strings.Contains(runner.calls[0], tun.Target) {
+		t.Fatalf("suspension calls = %#v, want TUN capture deleted first", runner.calls)
+	}
+	persisted, err := loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.RoutesSuspended || len(persisted.Routes) != 4 {
+		t.Fatalf("persisted suspended state = %#v", persisted)
+	}
+
+	// Physical managed routes are restored by reconciliation before this call;
+	// resume must add only capture routes after the engine is rebound.
+	runner.calls = nil
+	added, err := app.resumeCaptureRoutes(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 2 || state.RoutesSuspended {
+		t.Fatalf("resume added %d routes, suspended=%v", added, state.RoutesSuspended)
+	}
+	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0], " add ") || !strings.Contains(runner.calls[0], dns.Target) ||
+		!strings.Contains(runner.calls[1], tun.Target) {
+		t.Fatalf("resume calls = %#v, want DNS then broad TUN capture", runner.calls)
+	}
+}
+
 func TestCleanupRemovesTUNCaptureBeforeReconcileJournalRoutes(t *testing.T) {
 	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
 	tun4 := Route{Family: "inet", Kind: "net", Target: "1.0.0.0/8", Gateway: tunGateway4, Purpose: "tun"}

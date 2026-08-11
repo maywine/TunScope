@@ -32,7 +32,7 @@ Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
-Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会原位刷新路由和旧连接，切换到另一块物理网卡时会安全停止并要求重新启动数据面。
+Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会先撤销自身捕获路由，让系统网络、代理和其他 VPN 恢复；新网关与主 IPv4 连续稳定且物理路由通过延迟复核后，才重新绑定 engine 并恢复 TUN。切换到另一块物理网卡时会安全停止并要求重新启动数据面。
 
 ## 搭配 dnscrypt-proxy
 
@@ -242,7 +242,7 @@ sudo tunscope up -p socks5://127.0.0.1:7890 --interface en0 --gateway 192.168.1.
 - 修改路由和创建 `utun` 必须使用 `sudo`；`doctor` 和 `status` 不需要修改系统。
 - 如果把密码直接写进 `--proxy`，当前 `tunscope` 父进程的命令行仍可能被本机进程检查工具看到；本地监听端口建议不设认证，或确保机器账户本身可信。
 - 按应用模式会自动探测本地代理程序当前连接的真实远端节点并添加绕行路由，防止代理自身再次进入 TUN。全局模式仍须用 `--bypass` 指定真实代理节点。
-- 自动网络模式检测到物理路由消失并确认旧主 IPv4 已从网卡移除时，会立即清除 engine 中已经失效的直连源地址并关闭旧 egress flow，同时保持 TUN 捕获路由有效；如果旧地址仍在，则不会仅因短暂路由空窗打断连接。DHCP 返回首个包含网关、接口和主 IPv4 的完整快照后，会立即刷新物理路由并发布新源地址，不再额外等待下一轮采样。物理网络不可用的 30 秒保护超时只在 Mac 完整唤醒时累计，睡眠和暗唤醒阶段暂停，避免夜间维护唤醒误停 TUN。
+- 自动网络模式检测到物理路由消失时，会立即撤下 TunScope 安装的捕获、绕行和 scoped 路由，清除 engine 中的直连源地址并关闭旧 egress flow，但保留 owner、engine 和 `utun` 设备；在此期间所有应用先使用 macOS 系统路由完成 DHCP，Trojan、corplink 等传输也可独立恢复。DHCP 返回后，TunScope 会等待网关、接口和主 IPv4 连续稳定，重建物理 scoped 路由，并在下一轮再次核验这些路由仍由新网关和物理接口承载；macOS 若在切换末期清掉 scoped 路由会触发自动重建，持续 10 秒仍不可用则安全停止 TUN。核验通过后才给 engine 发布新源地址、关闭过渡期 flow 并恢复 TUN 捕获。物理网络完全不可用的 30 秒保护超时只在 Mac 完整唤醒时累计，睡眠和暗唤醒阶段暂停。该策略以可用性优先，因此切换期间选中应用存在短暂直连窗口。
 - 当前实现以未选应用可用性优先：极少数无法确认归属的流会保持直连，自动重建数据面时也存在短暂直连窗口。因此它不是严格防泄漏的 Apple Per-App VPN；需要强制 fail-closed 的场景应使用具备相应 entitlement/管理能力的 Network Extension。
 - 局域网已有的更精确路由会保持直连。按应用模式启用 trusted DNS 时，进入 TUN 的 53 端口 DNS 会经 SOCKS5 转发；未启用时，本地解析器留在 loopback，外部解析器保持物理直连，以免未选应用受影响，但存在 DNS 泄漏的取舍。全局模式会为外部系统 DNS 添加主机路由，并通过 SOCKS5 转发。
 - `SIGKILL` 或断电无法执行即时清理；下一次 `sudo tunscope up` 会清理残留，或手动运行 `sudo tunscope down`。

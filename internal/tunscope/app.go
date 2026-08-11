@@ -375,6 +375,12 @@ activeLoop:
 			if reconcileErr != nil {
 				var networkUnavailable *physicalNetworkUnavailableSignal
 				if errors.As(reconcileErr, &networkUnavailable) {
+					suspended, err := a.suspendOwnedRoutes(state)
+					if err != nil {
+						returnErr = fmt.Errorf("pause TUN routes after physical network loss: %w", err)
+						fmt.Fprintln(a.errOut, returnErr)
+						break activeLoop
+					}
 					closed, err := engineControl.InvalidateNetwork(3 * time.Second)
 					if err != nil {
 						returnErr = fmt.Errorf("invalidate TUN flows after physical network loss: %w", err)
@@ -383,22 +389,36 @@ activeLoop:
 					}
 					fmt.Fprintf(
 						a.out,
-						"network update: %s; engine cleared the stale physical source and closed %d egress connection(s), TUN capture remained active\n",
+						"network update: %s; suspended %d owned route(s), cleared the physical source, and closed %d egress connection(s); applications now use the system network until recovery\n",
 						networkUnavailable,
+						suspended,
 						closed,
 					)
 					continue
 				}
 				var networkChange *physicalNetworkChangeError
 				if errors.As(reconcileErr, &networkChange) {
-					fmt.Fprintf(a.out, "network update: %s; physical routes refreshed, rebinding old flows without dropping TUN capture\n", networkChange)
+					if state.RoutesSuspended {
+						fmt.Fprintf(a.out, "network update: %s; physical routes verified, rebinding the engine before TUN capture resumes\n", networkChange)
+					} else {
+						fmt.Fprintf(a.out, "network update: %s; physical routes refreshed, rebinding old flows without dropping TUN capture\n", networkChange)
+					}
 					closed, err := engineControl.RebindNetwork(networkChange.Source4, 3*time.Second)
 					if err != nil {
 						returnErr = fmt.Errorf("rebind TUN flows after physical network change: %w", err)
 						fmt.Fprintln(a.errOut, returnErr)
 						break activeLoop
 					}
-					fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress connection(s), TUN capture remained active\n", closed)
+					resumed := 0
+					if state.RoutesSuspended {
+						resumed, err = a.resumeCaptureRoutes(state)
+						if err != nil {
+							returnErr = fmt.Errorf("resume TUN capture after physical network recovery: %w", err)
+							fmt.Fprintln(a.errOut, returnErr)
+							break activeLoop
+						}
+					}
+					fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress connection(s) and restored %d TUN capture route(s)\n", closed, resumed)
 					continue
 				}
 				returnErr = fmt.Errorf("physical network reconciliation failed; stopping TUN to restore normal networking: %w", reconcileErr)
@@ -731,6 +751,74 @@ func (a *App) addAndSaveRoute(state *State, route Route) error {
 	return saveState(state)
 }
 
+// suspendOwnedRoutes removes every route installed by TunScope while leaving
+// the owner, engine, and utun device alive. During a Wi-Fi handoff this gives
+// macOS and unrelated applications an unmodified routing table in which to
+// finish DHCP and reconnect VPN/proxy transports. The persisted route ledger
+// is intentionally retained so cleanup remains crash-safe and recovery can
+// rebuild the managed physical routes before capture resumes.
+func (a *App) suspendOwnedRoutes(state *State) (int, error) {
+	if state == nil {
+		return 0, fmt.Errorf("route suspension state is nil")
+	}
+	if state.RoutesSuspended {
+		return 0, nil
+	}
+	removed := 0
+	for _, route := range cleanupRoutesInSafeOrder(state) {
+		if err := deleteRoute(a.runner, route); err != nil && !routeAlreadyMissing(err) {
+			return removed, fmt.Errorf("delete %s route %s while suspending: %w", route.Purpose, route.Target, err)
+		}
+		removed++
+	}
+	state.RoutesSuspended = true
+	if err := saveState(state); err != nil {
+		return removed, fmt.Errorf("persist suspended route state: %w", err)
+	}
+	return removed, nil
+}
+
+func isCaptureRoute(route Route) bool {
+	return route.Purpose == "tun" || route.Purpose == "dns"
+}
+
+// resumeCaptureRoutes runs only after the replacement physical routes have
+// survived a verification poll and the engine has published the new source.
+// Managed physical routes were already rebuilt by reconcilePhysicalRoutes;
+// restoring only capture routes avoids a window where traffic reaches an
+// engine that is still bound to the vanished network.
+func (a *App) resumeCaptureRoutes(state *State) (int, error) {
+	if state == nil {
+		return 0, fmt.Errorf("route resume state is nil")
+	}
+	if !state.RoutesSuspended {
+		return 0, nil
+	}
+	routes := make([]Route, 0)
+	for _, route := range state.Routes {
+		if isCaptureRoute(route) {
+			routes = append(routes, route)
+		}
+	}
+	// Restore exact DNS capture first and broad TUN networks last. If an add
+	// fails, normal session cleanup removes any partial restoration.
+	sort.SliceStable(routes, func(i, j int) bool {
+		return routes[i].Purpose == "dns" && routes[j].Purpose != "dns"
+	})
+	added := 0
+	for _, route := range routes {
+		if err := addRoute(a.runner, route); err != nil && !routeAlreadyExists(err) {
+			return added, fmt.Errorf("add %s route %s while resuming: %w", route.Purpose, route.Target, err)
+		}
+		added++
+	}
+	state.RoutesSuspended = false
+	if err := saveState(state); err != nil {
+		return added, fmt.Errorf("persist resumed route state: %w", err)
+	}
+	return added, nil
+}
+
 var (
 	engineTerminateGrace = 1500 * time.Millisecond
 	engineKillGrace      = 500 * time.Millisecond
@@ -755,6 +843,7 @@ func (a *App) cleanup(state *State, engineProcess *os.Process) error {
 		failedRoutes[left], failedRoutes[right] = failedRoutes[right], failedRoutes[left]
 	}
 	state.Routes = failedRoutes
+	state.RoutesSuspended = false
 	state.RouteReconcile = nil
 
 	if err := stopEngine(state, engineProcess); err != nil {
@@ -1066,6 +1155,9 @@ func (a *App) Status() error {
 	fmt.Fprintf(a.out, "proxy: %s\n", state.Proxy)
 	fmt.Fprintf(a.out, "device: %s\n", state.Device)
 	fmt.Fprintf(a.out, "physical interface: %s\n", state.Interface)
+	if state.RoutesSuspended {
+		fmt.Fprintln(a.out, "TUN capture: suspended while the physical network recovers")
+	}
 	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
 	if len(state.Applications) > 0 {
 		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))

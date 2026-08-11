@@ -23,8 +23,10 @@ import (
 )
 
 const (
-	windowsNetworkPollInterval = time.Second
-	windowsNetworkLossGrace    = 30 * time.Second
+	windowsNetworkPollInterval       = time.Second
+	windowsNetworkStableSampleCount  = 3
+	windowsNetworkLossGrace          = 30 * time.Second
+	windowsNetworkRecoveryRouteGrace = 10 * time.Second
 )
 
 func (a *App) Up(cfg Config) error {
@@ -275,9 +277,12 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 		defer networkTicker.Stop()
 	}
 	physicalSignature := windowsPhysicalSignature(physical)
+	physicalPathSignature := windowsPhysicalPathSignature(physical)
 	candidateSignature := ""
 	candidateCount := 0
 	var networkUnavailableSince time.Time
+	var recoveryStartedAt time.Time
+	preparedSignature := ""
 
 activeLoop:
 	for {
@@ -305,9 +310,25 @@ activeLoop:
 		case <-networkTicks:
 			next, sampleErr := readWindowsPhysicalNetwork(a.runner, "", cfg.IPv6)
 			if sampleErr != nil {
+				candidateSignature = ""
+				candidateCount = 0
+				preparedSignature = ""
 				if networkUnavailableSince.IsZero() {
 					networkUnavailableSince = time.Now()
-					fmt.Fprintf(a.errOut, "network update: physical route is temporarily unavailable: %v\n", sampleErr)
+					fmt.Fprintf(a.errOut, "network update: physical route is temporarily unavailable; pausing TUN capture until recovery: %v\n", sampleErr)
+				}
+				if !state.RoutesSuspended {
+					suspended, closed, pauseErr := a.pauseWindowsNetwork(state, control)
+					if pauseErr != nil {
+						returnErr = fmt.Errorf("pause TUN after physical network loss: %w", pauseErr)
+						break activeLoop
+					}
+					fmt.Fprintf(
+						a.out,
+						"network update: suspended %d owned route(s), cleared the physical source, and closed %d egress connection(s); applications now use the Windows system network until recovery\n",
+						suspended,
+						closed,
+					)
 				}
 				if time.Since(networkUnavailableSince) >= windowsNetworkLossGrace {
 					returnErr = fmt.Errorf("physical network was unavailable for %s: %w", windowsNetworkLossGrace, sampleErr)
@@ -315,24 +336,66 @@ activeLoop:
 				}
 				continue
 			}
-			if !networkUnavailableSince.IsZero() {
-				fmt.Fprintln(a.out, "network update: physical route is available again")
-				networkUnavailableSince = time.Time{}
-			}
 			nextSignature := windowsPhysicalSignature(next)
-			if nextSignature == physicalSignature {
+			nextPathSignature := windowsPhysicalPathSignature(next)
+
+			if !state.RoutesSuspended && nextPathSignature == physicalPathSignature {
+				// DNS-only changes do not require a data-plane pause. Debounce them,
+				// then update their exact physical/TUN routes in place.
+				if nextSignature == physicalSignature {
+					candidateSignature = ""
+					candidateCount = 0
+					continue
+				}
+				if nextSignature != candidateSignature {
+					candidateSignature = nextSignature
+					candidateCount = 1
+					continue
+				}
+				candidateCount++
+				if candidateCount < windowsNetworkStableSampleCount {
+					continue
+				}
+				if err := a.reconcileWindowsPhysicalRoutes(state, cfg, next, bypasses, windowsDNSAddresses(next.DNSServers)); err != nil {
+					returnErr = fmt.Errorf("reconcile Windows DNS routes: %w", err)
+					break activeLoop
+				}
+				fmt.Fprintf(a.out, "network update: DNS configuration stabilized on %s; refreshed dependent routes without pausing TUN capture\n", next.InterfaceAlias)
+				physical = next
+				physicalSignature = nextSignature
+				physicalPathSignature = nextPathSignature
 				candidateSignature = ""
 				candidateCount = 0
 				continue
 			}
-			if nextSignature != candidateSignature {
+
+			if !state.RoutesSuspended {
+				recoveryStartedAt = time.Now()
 				candidateSignature = nextSignature
 				candidateCount = 1
+				preparedSignature = ""
+				suspended, closed, pauseErr := a.pauseWindowsNetwork(state, control)
+				if pauseErr != nil {
+					returnErr = fmt.Errorf("pause TUN for physical network change: %w", pauseErr)
+					break activeLoop
+				}
+				fmt.Fprintf(
+					a.out,
+					"network update: physical path changed on %s; suspended %d owned route(s), cleared the old source, and closed %d egress connection(s); validating the replacement network before capture resumes\n",
+					next.InterfaceAlias,
+					suspended,
+					closed,
+				)
 				continue
 			}
-			candidateCount++
-			if candidateCount < 2 {
-				continue
+
+			if !networkUnavailableSince.IsZero() {
+				fmt.Fprintln(a.out, "network update: physical route is available again; validating the replacement network")
+				networkUnavailableSince = time.Time{}
+				recoveryStartedAt = time.Now()
+			}
+			if recoveryStartedAt.IsZero() {
+				recoveryStartedAt = time.Now()
 			}
 			if next.InterfaceIndex != physical.InterfaceIndex || !strings.EqualFold(next.InterfaceAlias, physical.InterfaceAlias) {
 				returnErr = fmt.Errorf("physical interface changed from %s to %s; stopping safely so tunscope can be started against the new adapter", physical.InterfaceAlias, next.InterfaceAlias)
@@ -342,20 +405,66 @@ activeLoop:
 				returnErr = fmt.Errorf("physical IPv6 interface changed from %s to %s; stopping safely so tunscope can be started against the new adapter", physical.Interface6Alias, next.Interface6Alias)
 				break activeLoop
 			}
-			if err := a.reconcileWindowsPhysicalRoutes(state, cfg, next, bypasses, windowsDNSAddresses(next.DNSServers)); err != nil {
-				returnErr = fmt.Errorf("reconcile Windows physical routes: %w", err)
-				break activeLoop
+			if nextSignature != candidateSignature {
+				candidateSignature = nextSignature
+				candidateCount = 1
+				preparedSignature = ""
+				continue
+			}
+			candidateCount++
+			if candidateCount < windowsNetworkStableSampleCount {
+				continue
+			}
+
+			dns := windowsDNSAddresses(next.DNSServers)
+			if preparedSignature == "" {
+				if err := a.prepareWindowsRecoveryRoutes(state, cfg, next, bypasses, dns); err != nil {
+					if time.Since(recoveryStartedAt) >= windowsNetworkRecoveryRouteGrace {
+						returnErr = fmt.Errorf("replacement Windows routes remained unusable for %s: %w", windowsNetworkRecoveryRouteGrace, err)
+						break activeLoop
+					}
+					fmt.Fprintf(a.errOut, "network update: replacement physical routes are not ready; retrying while TUN capture remains suspended: %v\n", err)
+					continue
+				}
+				if err := verifyWindowsPhysicalNetwork(a.runner, next, windowsPhysicalRoutes(cfg, next, bypasses, dns)); err != nil {
+					if time.Since(recoveryStartedAt) >= windowsNetworkRecoveryRouteGrace {
+						returnErr = fmt.Errorf("replacement Windows routes remained unusable for %s: %w", windowsNetworkRecoveryRouteGrace, err)
+						break activeLoop
+					}
+					fmt.Fprintf(a.errOut, "network update: replacement physical routes failed verification; retrying while TUN capture remains suspended: %v\n", err)
+					continue
+				}
+				preparedSignature = nextSignature
+				fmt.Fprintln(a.out, "network update: replacement physical routes refreshed; waiting one poll to verify that Windows keeps them")
+				continue
+			}
+			if err := verifyWindowsPhysicalNetwork(a.runner, next, windowsPhysicalRoutes(cfg, next, bypasses, dns)); err != nil {
+				preparedSignature = ""
+				if time.Since(recoveryStartedAt) >= windowsNetworkRecoveryRouteGrace {
+					returnErr = fmt.Errorf("replacement Windows routes remained unusable for %s: %w", windowsNetworkRecoveryRouteGrace, err)
+					break activeLoop
+				}
+				fmt.Fprintf(a.errOut, "network update: Windows removed a replacement route during handoff verification; scheduling another refresh: %v\n", err)
+				continue
 			}
 			closed, err := control.RebindNetwork(next.Source4, 3*time.Second)
 			if err != nil {
 				returnErr = fmt.Errorf("rebind TUN flows after physical network change: %w", err)
 				break activeLoop
 			}
-			fmt.Fprintf(a.out, "network update: gateway/source changed on %s; refreshed routes and closed %d stale egress connection(s)\n", next.InterfaceAlias, closed)
+			resumed, err := a.resumeWindowsCaptureRoutes(state, cfg, dns)
+			if err != nil {
+				returnErr = fmt.Errorf("resume Windows TUN capture after physical network recovery: %w", err)
+				break activeLoop
+			}
+			fmt.Fprintf(a.out, "network update: physical network recovered on %s (%s via %s); engine acknowledged the handoff, closed %d stale egress connection(s), and restored %d TUN capture route(s)\n", next.InterfaceAlias, next.Source4, next.Gateway4, closed, resumed)
 			physical = next
 			physicalSignature = nextSignature
+			physicalPathSignature = nextPathSignature
 			candidateSignature = ""
 			candidateCount = 0
+			preparedSignature = ""
+			recoveryStartedAt = time.Time{}
 		}
 	}
 
@@ -516,6 +625,15 @@ func windowsPhysicalSignature(physical windowsPhysicalNetwork) string {
 	}, "\x00")
 }
 
+func windowsPhysicalPathSignature(physical windowsPhysicalNetwork) string {
+	return strings.Join([]string{
+		strconv.Itoa(physical.InterfaceIndex), physical.InterfaceAlias,
+		physical.Gateway4, physical.Source4,
+		strconv.Itoa(physical.Interface6Index), physical.Interface6Alias,
+		physical.Gateway6,
+	}, "\x00")
+}
+
 func windowsManagedPhysicalRoute(route Route) bool {
 	return route.Purpose == "bypass" || route.Purpose == "dns-direct" || route.Purpose == "dns"
 }
@@ -523,10 +641,49 @@ func windowsManagedPhysicalRoute(route Route) bool {
 func (a *App) reconcileWindowsPhysicalRoutes(state *State, cfg Config, physical windowsPhysicalNetwork, bypasses []netip.Prefix, dns []netip.Addr) error {
 	desired := windowsPhysicalRoutes(cfg, physical, bypasses, dns)
 	desired = append(desired, windowsTUNDNSRoutes(cfg, state.DeviceIndex, dns)...)
+	if err := a.reconcileWindowsOwnedRoutes(state, desired, windowsManagedPhysicalRoute, false); err != nil {
+		return err
+	}
+	return saveWindowsPhysicalState(state, physical)
+}
+
+func windowsRecoveryPhysicalRoute(route Route) bool {
+	return route.Purpose == "bypass" || route.Purpose == "dns-direct"
+}
+
+// prepareWindowsRecoveryRoutes restores only routes that must use the physical
+// adapter. Broad TUN and exact TUN-DNS capture remain absent until the engine
+// acknowledges the replacement source address.
+func (a *App) prepareWindowsRecoveryRoutes(
+	state *State,
+	cfg Config,
+	physical windowsPhysicalNetwork,
+	bypasses []netip.Prefix,
+	dns []netip.Addr,
+) error {
+	if state == nil || !state.RoutesSuspended {
+		return fmt.Errorf("Windows recovery routes require suspended TUN capture")
+	}
+	desired := windowsPhysicalRoutes(cfg, physical, bypasses, dns)
+	if err := a.reconcileWindowsOwnedRoutes(state, desired, windowsRecoveryPhysicalRoute, true); err != nil {
+		return err
+	}
+	return saveWindowsPhysicalState(state, physical)
+}
+
+func (a *App) reconcileWindowsOwnedRoutes(
+	state *State,
+	desired []Route,
+	managed func(Route) bool,
+	ensureExisting bool,
+) error {
+	if state == nil {
+		return fmt.Errorf("Windows route reconciliation state is nil")
+	}
 	desiredKeys := make(map[string]struct{}, len(desired))
 	currentKeys := make(map[string]struct{})
 	for _, route := range state.Routes {
-		if windowsManagedPhysicalRoute(route) {
+		if managed(route) {
 			currentKeys[windowsRouteKey(route)] = struct{}{}
 		}
 	}
@@ -534,6 +691,11 @@ func (a *App) reconcileWindowsPhysicalRoutes(state *State, cfg Config, physical 
 		key := windowsRouteKey(route)
 		desiredKeys[key] = struct{}{}
 		if _, exists := currentKeys[key]; exists {
+			if ensureExisting {
+				if _, err := addWindowsRoute(a.runner, route); err != nil {
+					return fmt.Errorf("restore missing %s route %s: %w", route.Purpose, route.Target, err)
+				}
+			}
 			continue
 		}
 		if err := a.addAndSaveWindowsRoute(state, route); err != nil {
@@ -542,7 +704,7 @@ func (a *App) reconcileWindowsPhysicalRoutes(state *State, cfg Config, physical 
 	}
 	for i := len(state.Routes) - 1; i >= 0; i-- {
 		route := state.Routes[i]
-		if !windowsManagedPhysicalRoute(route) {
+		if !managed(route) {
 			continue
 		}
 		if _, keep := desiredKeys[windowsRouteKey(route)]; keep {
@@ -556,6 +718,10 @@ func (a *App) reconcileWindowsPhysicalRoutes(state *State, cfg Config, physical 
 			return err
 		}
 	}
+	return nil
+}
+
+func saveWindowsPhysicalState(state *State, physical windowsPhysicalNetwork) error {
 	state.Interface = physical.InterfaceAlias
 	state.Interface6 = physical.Interface6Alias
 	state.Gateway4 = physical.Gateway4
@@ -566,6 +732,81 @@ func (a *App) reconcileWindowsPhysicalRoutes(state *State, cfg Config, physical 
 		state.PhysicalIPv6 = []string{physical.Source6}
 	}
 	return saveState(state)
+}
+
+// pauseWindowsNetwork removes only routes owned by this session and then asks
+// the still-running engine to forget its vanished source address. With no
+// capture routes installed, every application follows the normal Windows
+// routing table while DHCP, the local proxy, and other VPNs recover.
+func (a *App) pauseWindowsNetwork(state *State, control *windowsEngineController) (int, int, error) {
+	suspended, err := a.suspendWindowsOwnedRoutes(state)
+	if err != nil {
+		return suspended, 0, err
+	}
+	closed, err := control.InvalidateNetwork(3 * time.Second)
+	if err != nil {
+		return suspended, 0, err
+	}
+	return suspended, closed, nil
+}
+
+func windowsRoutesInSafeOrder(routes []Route) []Route {
+	ordered := append([]Route(nil), routes...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return windowsCleanupPriority(ordered[i]) < windowsCleanupPriority(ordered[j])
+	})
+	return ordered
+}
+
+func (a *App) suspendWindowsOwnedRoutes(state *State) (int, error) {
+	if state == nil {
+		return 0, fmt.Errorf("Windows route suspension state is nil")
+	}
+	if state.RoutesSuspended {
+		return 0, nil
+	}
+	routes := windowsRoutesInSafeOrder(state.Routes)
+	failed, deleteErr := deleteWindowsRoutes(a.runner, routes)
+	removed := len(routes) - len(failed)
+	state.Routes = failed
+	if deleteErr != nil {
+		saveErr := saveState(state)
+		if saveErr != nil {
+			return removed, errors.Join(deleteErr, fmt.Errorf("save partially suspended Windows route state: %w", saveErr))
+		}
+		return removed, deleteErr
+	}
+	state.RoutesSuspended = true
+	if err := saveState(state); err != nil {
+		return removed, fmt.Errorf("persist suspended Windows route state: %w", err)
+	}
+	return removed, nil
+}
+
+func (a *App) resumeWindowsCaptureRoutes(state *State, cfg Config, dns []netip.Addr) (int, error) {
+	if state == nil {
+		return 0, fmt.Errorf("Windows route resume state is nil")
+	}
+	if !state.RoutesSuspended {
+		return 0, nil
+	}
+	routes := windowsTUNDNSRoutes(cfg, state.DeviceIndex, dns)
+	routes = append(routes, windowsCaptureRoutes(state.DeviceIndex, cfg.IPv6)...)
+	added := 0
+	for _, route := range routes {
+		before := len(state.Routes)
+		if err := a.addAndSaveWindowsRoute(state, route); err != nil {
+			return added, fmt.Errorf("add %s route %s while resuming: %w", route.Purpose, route.Target, err)
+		}
+		if len(state.Routes) > before {
+			added++
+		}
+	}
+	state.RoutesSuspended = false
+	if err := saveState(state); err != nil {
+		return added, fmt.Errorf("persist resumed Windows route state: %w", err)
+	}
+	return added, nil
 }
 
 type windowsEngineController struct {
@@ -596,31 +837,44 @@ func newWindowsEngineController(commands, responseFile *os.File) *windowsEngineC
 }
 
 func (c *windowsEngineController) RebindNetwork(source4 string, timeout time.Duration) (int, error) {
+	return c.sendNetworkCommand(func(generation uint64) EngineControlCommand {
+		return NewEngineNetworkCommand(generation, source4)
+	}, timeout)
+}
+
+func (c *windowsEngineController) InvalidateNetwork(timeout time.Duration) (int, error) {
+	return c.sendNetworkCommand(NewEngineNetworkInvalidationCommand, timeout)
+}
+
+func (c *windowsEngineController) sendNetworkCommand(
+	newCommand func(uint64) EngineControlCommand,
+	timeout time.Duration,
+) (int, error) {
 	if c == nil {
 		return 0, fmt.Errorf("engine control channel is unavailable")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.generation++
-	command := NewEngineNetworkCommand(c.generation, source4)
+	command := newCommand(c.generation)
 	if err := json.NewEncoder(c.commands).Encode(command); err != nil {
-		return 0, fmt.Errorf("send engine network update: %w", err)
+		return 0, fmt.Errorf("send engine network generation %d: %w", command.Generation, err)
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case response := <-c.responses:
 		if response.Action != command.Action || response.Generation != command.Generation {
-			return 0, fmt.Errorf("unexpected engine acknowledgement")
+			return 0, fmt.Errorf("unexpected engine acknowledgement: action=%q generation=%d", response.Action, response.Generation)
 		}
 		if response.Error != "" {
-			return 0, errors.New(response.Error)
+			return 0, fmt.Errorf("engine rejected network generation %d: %s", response.Generation, response.Error)
 		}
 		return response.Closed, nil
 	case err := <-c.responseErr:
 		return 0, fmt.Errorf("engine control channel closed: %w", err)
 	case <-timer.C:
-		return 0, fmt.Errorf("timed out waiting for engine network update")
+		return 0, fmt.Errorf("timed out waiting for engine network generation %d", command.Generation)
 	}
 }
 
@@ -757,14 +1011,14 @@ func (a *App) cleanupWindows(state *State, engineProcess *os.Process, control *w
 	if state == nil {
 		return fmt.Errorf("cleanup state is nil")
 	}
-	routes := append([]Route(nil), state.Routes...)
-	sort.SliceStable(routes, func(i, j int) bool { return windowsCleanupPriority(routes[i]) < windowsCleanupPriority(routes[j]) })
+	routes := windowsRoutesInSafeOrder(state.Routes)
 	var cleanupErrs []error
 	failed, routeCleanupErr := deleteWindowsRoutes(a.runner, routes)
 	if routeCleanupErr != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete Windows routes: %w", routeCleanupErr))
 	}
 	state.Routes = failed
+	state.RoutesSuspended = false
 	state.RouteReconcile = nil
 	if control != nil {
 		control.Close()
@@ -999,7 +1253,11 @@ func (a *App) Status() error {
 	if detail != "" {
 		fmt.Fprintf(a.out, "status detail: %s\n", detail)
 	}
-	fmt.Fprintf(a.out, "phase: %s\nproxy: %s\ndevice: %s\nphysical interface: %s\nowner PID: %d\nengine PID: %d\n", state.Phase, state.Proxy, state.Device, state.Interface, state.OwnerPID, state.EnginePID)
+	fmt.Fprintf(a.out, "phase: %s\nproxy: %s\ndevice: %s\nphysical interface: %s\n", state.Phase, state.Proxy, state.Device, state.Interface)
+	if state.RoutesSuspended {
+		fmt.Fprintln(a.out, "TUN capture: suspended while the physical network recovers")
+	}
+	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
 	if len(state.Applications) > 0 {
 		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))
 	}

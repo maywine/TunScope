@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"syscall"
 	"testing"
+	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"golang.org/x/sys/unix"
@@ -80,7 +81,7 @@ func TestBoundDirectDialerUpdatesValidatedIPv4Source(t *testing.T) {
 	}
 }
 
-func TestPerAppDialerInvalidationClearsSourceWithoutResettingRecoveredFlowTwice(t *testing.T) {
+func TestPerAppDialerRecoveryClosesUDPFlowOpenedWhileUnavailable(t *testing.T) {
 	rawDirect, err := newBoundDirectDialer("lo0", "", "192.0.2.10")
 	if err != nil {
 		t.Fatal(err)
@@ -104,22 +105,37 @@ func TestPerAppDialerInvalidationClearsSourceWithoutResettingRecoveredFlowTwice(
 		t.Fatalf("direct source after invalidation = %s, want unset", source)
 	}
 
-	recovered, recoveredPeer := net.Pipe()
-	defer recoveredPeer.Close()
-	if _, err := d.flows.trackConn(d.flows.currentGeneration(), recovered); err != nil {
+	gapFlow, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			t.Skipf("sandbox does not permit a UDP socket: %v", err)
+		}
 		t.Fatal(err)
 	}
+	trackedGapFlow, err := d.flows.trackPacketConn(d.flows.currentGeneration(), gapFlow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trackedGapFlow.Close()
 	closed, err = d.RebindNetwork("192.0.2.37")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if closed != 0 {
-		t.Fatalf("flows closed again at recovery = %d, want 0", closed)
+	if closed != 1 {
+		t.Fatalf("flows closed at recovery = %d, want 1", closed)
+	}
+	if err := gapFlow.SetDeadline(time.Now()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("UDP flow opened while unavailable close error = %v, want net.ErrClosed", err)
 	}
 	if source := direct.currentSource4().String(); source != "192.0.2.37" {
 		t.Fatalf("direct source after recovery = %q", source)
 	}
 
+	stable, stablePeer := net.Pipe()
+	defer stablePeer.Close()
+	if _, err := d.flows.trackConn(d.flows.currentGeneration(), stable); err != nil {
+		t.Fatal(err)
+	}
 	closed, err = d.RebindNetwork("192.0.2.38")
 	if err != nil {
 		t.Fatal(err)
