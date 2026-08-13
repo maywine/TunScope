@@ -18,9 +18,14 @@ const (
 	proxyPeerPollEvery         = 4
 	networkUnavailableGrace    = 30 * time.Second
 	networkRecoveryGrace       = 10 * time.Second
+	networkWakePollGap         = 3 * time.Second
+	directRouteAuditInterval   = 5 * time.Second
 )
 
-var networkPollInterval = 750 * time.Millisecond
+var (
+	networkPollInterval       = 750 * time.Millisecond
+	postWakeRouteAuditSamples = len(ipv4TunNetworks)
+)
 
 type physicalRouteSnapshot struct {
 	Gateway4   string
@@ -347,27 +352,48 @@ func routesWithPhysicalSources(routes []Route, snapshot physicalRouteSnapshot) [
 	return result
 }
 
-func routeProbeAddress(target string) (string, error) {
-	prefix, err := netip.ParsePrefix(target)
-	if err != nil {
-		addr, addrErr := netip.ParseAddr(target)
-		if addrErr != nil {
-			return "", fmt.Errorf("parse route target %q: %w", target, addrErr)
+func parseIPv4RoutePrefix(output string) (netip.Prefix, error) {
+	var destination, mask string
+	for _, line := range strings.Split(output, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
 		}
-		return addr.String(), nil
-	}
-	addr := prefix.Masked().Addr()
-	// Avoid probing the network address and, for 198.18.0.0/15, TunScope's
-	// own 198.18.0.1 gateway. Every direct-scope prefix is large enough for
-	// two increments.
-	for range 2 {
-		next := addr.Next()
-		if !next.IsValid() || !prefix.Contains(next) {
-			break
+		switch strings.TrimSpace(key) {
+		case "destination":
+			destination = strings.TrimSpace(value)
+		case "mask":
+			mask = strings.TrimSpace(value)
 		}
-		addr = next
 	}
-	return addr.String(), nil
+	if destination == "default" && (mask == "" || mask == "default") {
+		return netip.MustParsePrefix("0.0.0.0/0"), nil
+	}
+	addr, err := netip.ParseAddr(destination)
+	if err != nil || !addr.Is4() {
+		return netip.Prefix{}, fmt.Errorf("route destination %q is not IPv4", destination)
+	}
+	maskAddr, err := netip.ParseAddr(mask)
+	if err != nil || !maskAddr.Is4() {
+		return netip.Prefix{}, fmt.Errorf("route mask %q is not IPv4", mask)
+	}
+	mask4 := maskAddr.As4()
+	ones := 0
+	seenZero := false
+	for _, octet := range mask4 {
+		for bit := 7; bit >= 0; bit-- {
+			set := octet&(1<<bit) != 0
+			if set && seenZero {
+				return netip.Prefix{}, fmt.Errorf("route mask %q is not contiguous", mask)
+			}
+			if set {
+				ones++
+			} else {
+				seenZero = true
+			}
+		}
+	}
+	return netip.PrefixFrom(addr.Unmap(), ones).Masked(), nil
 }
 
 // verifyDirectScopedRoutes checks the route table through the same interface
@@ -383,17 +409,32 @@ func verifyDirectScopedRoutes(r commandRunner, routes []Route) error {
 		if managed.Scope == "" || managed.Gateway == "" {
 			return fmt.Errorf("direct route %s lacks an interface scope or gateway", managed.Target)
 		}
-		probe, err := routeProbeAddress(managed.Target)
+		expectedPrefix, err := netip.ParsePrefix(managed.Target)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse managed direct route %q: %w", managed.Target, err)
 		}
-		out, err := r.Run("/sbin/route", "-n", "get", "-ifscope", managed.Scope, probe)
+		// Query the owned network route itself instead of an address inside it.
+		// This prevents a cached host clone or unrelated more-specific route from
+		// making a flushed direct-scope prefix appear healthy.
+		out, err := r.Run("/sbin/route", "-n", "get", "-net", "-ifscope", managed.Scope, managed.Target)
 		if err != nil {
 			return fmt.Errorf("lookup scoped route %s on %s: %w", managed.Target, managed.Scope, err)
 		}
 		gateway, iface, err := parseRouteGet(out)
 		if err != nil {
 			return fmt.Errorf("parse scoped route %s on %s: %w", managed.Target, managed.Scope, err)
+		}
+		resolvedPrefix, err := parseIPv4RoutePrefix(out)
+		if err != nil {
+			return fmt.Errorf("parse scoped route prefix %s on %s: %w", managed.Target, managed.Scope, err)
+		}
+		if resolvedPrefix != expectedPrefix.Masked() {
+			return fmt.Errorf(
+				"scoped route %s resolved as %s on %s",
+				managed.Target,
+				resolvedPrefix,
+				managed.Scope,
+			)
 		}
 		if gateway != managed.Gateway || iface != managed.Scope {
 			return fmt.Errorf(
@@ -766,6 +807,10 @@ type liveNetworkMonitor struct {
 	recoveryPrepared    string
 	recoveryStartedAt   time.Time
 	dnsUnavailable      bool
+	lastPollAt          time.Time
+	lastRouteAuditAt    time.Time
+	nextRouteAudit      int
+	postWakeRouteAudits int
 	now                 func() time.Time
 	fullWake            func() bool
 	routeObservation    stableObservation
@@ -848,12 +893,86 @@ func (m *liveNetworkMonitor) currentBypasses() ([]netip.Prefix, error) {
 	return mergeBypassPrefixes(m.baseBypasses, m.autoPeers)
 }
 
+// observePollGap detects the wall-clock discontinuity left when macOS stops
+// scheduling the owner during sleep. A wake can preserve the same default
+// route signature while flushing TunScope's manually-added scoped routes, so
+// the normal gateway/address observations alone cannot detect this transition.
+func (m *liveNetworkMonitor) observePollGap(now time.Time) (time.Duration, bool) {
+	if m.lastPollAt.IsZero() {
+		m.lastPollAt = now
+		return 0, false
+	}
+	// time.Time.Sub prefers its monotonic component. On macOS that clock may not
+	// advance while the machine is asleep, so compare the wall-clock component
+	// deliberately; otherwise a lid-close interval can look like a normal tick.
+	gap := time.Duration(now.UnixNano() - m.lastPollAt.UnixNano())
+	m.lastPollAt = now
+	if gap < networkWakePollGap {
+		return gap, false
+	}
+	m.postWakeRouteAudits = postWakeRouteAuditSamples
+	return gap, true
+}
+
+func (m *liveNetworkMonitor) routeAuditDue(now time.Time, woke bool) bool {
+	if woke || m.postWakeRouteAudits > 0 || m.lastRouteAuditAt.IsZero() {
+		return true
+	}
+	// Treat a backwards wall-clock adjustment as due instead of postponing the
+	// next audit indefinitely. Go normally retains monotonic time here, but test
+	// clocks and process restoration do not have to.
+	elapsed := time.Duration(now.UnixNano() - m.lastRouteAuditAt.UnixNano())
+	return elapsed < 0 || elapsed >= directRouteAuditInterval
+}
+
+func directScopedRoutesOnly(routes []Route) []Route {
+	direct := make([]Route, 0, len(routes))
+	for _, route := range routes {
+		if route.Purpose == "direct-scope" && route.Family == "inet" {
+			direct = append(direct, route)
+		}
+	}
+	return direct
+}
+
+func (m *liveNetworkMonitor) auditDirectScopedRoutes(r commandRunner, routes []Route, full bool) error {
+	direct := directScopedRoutesOnly(routes)
+	if len(direct) == 0 {
+		return nil
+	}
+	if full {
+		if err := verifyDirectScopedRoutes(r, direct); err != nil {
+			return err
+		}
+		m.nextRouteAudit = 0
+		return nil
+	}
+	index := m.nextRouteAudit % len(direct)
+	if err := verifyDirectScopedRoutes(r, direct[index:index+1]); err != nil {
+		return err
+	}
+	m.nextRouteAudit = (index + 1) % len(direct)
+	return nil
+}
+
+func (m *liveNetworkMonitor) beginDirectRouteRecovery(now time.Time) {
+	m.addressObservation.resetCandidate()
+	m.routeObservation.resetCandidate()
+	m.recoveryObservation.commit("")
+	m.recoveryPending = true
+	m.recoveryPrepared = ""
+	m.recoveryStartedAt = now
+	m.postWakeRouteAudits = 0
+}
+
 // poll samples the route, DNS, and proxy peers independently. In particular,
 // an unstable peer set can never postpone a gateway repair. Each stable change
 // is committed before sampling the next dependency, which restores the
 // direct-scope routes first after a Wi-Fi gateway change.
 func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, error) {
 	var updates []string
+	pollNow := m.now()
+	pollGap, woke := m.observePollGap(pollNow)
 
 	route, routeErr := samplePhysicalRoute(a.runner, m.includeIPv6)
 	if routeErr != nil {
@@ -866,7 +985,6 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			m.addressObservation.resetCandidate()
 			m.routeObservation.resetCandidate()
 			m.recoveryObservation.commit("")
-			now := m.now()
 			fullWake := true
 			if m.fullWake != nil {
 				fullWake = m.fullWake()
@@ -897,7 +1015,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 					updates = append(updates, "system sleep or dark wake detected; pausing the physical-network timeout")
 				}
 			}
-			m.accountUnavailableTime(now, fullWake)
+			m.accountUnavailableTime(pollNow, fullWake)
 			m.routeTimeoutPaused = !fullWake
 			m.routeUnavailable = true
 			m.recoveryPending = true
@@ -920,7 +1038,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		m.routeUnavailable = false
 		m.resetUnavailableTime()
 		m.recoveryPrepared = ""
-		m.recoveryStartedAt = m.now()
+		m.recoveryStartedAt = pollNow
 		updates = append(updates, "physical network is available again; validating the replacement route")
 	}
 	if routeErr == nil && m.recoveryPending {
@@ -954,19 +1072,21 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 				return updates, err
 			}
 			if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
-				if !m.recoveryStartedAt.IsZero() && m.now().Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
+				if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
 					return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
 				}
 				updates = append(updates, fmt.Sprintf("replacement physical routes are not ready; retrying without rebinding applications: %v", err))
 				return updates, nil
 			}
 			m.recoveryPrepared = recoverySignature
+			m.lastRouteAuditAt = pollNow
 			updates = append(updates, "replacement physical routes refreshed; waiting one poll to verify that macOS keeps the scoped routes")
 			return updates, nil
 		}
+		m.lastRouteAuditAt = pollNow
 		if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
 			m.recoveryPrepared = ""
-			if !m.recoveryStartedAt.IsZero() && m.now().Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
+			if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
 				return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
 			}
 			updates = append(updates, fmt.Sprintf("macOS removed a replacement scoped route during handoff verification; scheduling another refresh: %v", err))
@@ -987,10 +1107,52 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		m.recoveryPending = false
 		m.recoveryPrepared = ""
 		m.recoveryStartedAt = time.Time{}
+		m.postWakeRouteAudits = 0
 		m.recoveryObservation.commit(recoverySignature)
 		m.addressObservation.commit(observationSignature(route.signature(), nil))
 		m.routeObservation.commit(observationSignature(route.signature(), nil))
 		return updates, change
+	}
+	// Audit only when the sampled physical signature still matches the applied
+	// one. A real address/gateway change is handled by the debounced reconcile
+	// paths below; checking old scoped routes against a new gateway would turn a
+	// legitimate handoff into a false route-loss alarm.
+	if routeErr == nil && route.signature() == m.route.signature() && !state.RoutesSuspended && m.routeAuditDue(pollNow, woke) {
+		m.lastRouteAuditAt = pollNow
+		postWakeAudit := m.postWakeRouteAudits > 0
+		// The full audit on the first wake sample is separate from the rotating
+		// follow-up pass. Keep all prefixes queued so a delayed partial flush is
+		// guaranteed to be observed within one complete rotation.
+		if postWakeAudit && !woke {
+			m.postWakeRouteAudits--
+		}
+		// The first wake sample verifies every direct prefix. Follow-up wake
+		// samples and steady-state audits rotate through one prefix at a time to
+		// catch delayed route flushing without spawning nine route(8) processes
+		// every 750 ms.
+		if err := m.auditDirectScopedRoutes(a.runner, state.Routes, woke); err != nil {
+			m.beginDirectRouteRecovery(pollNow)
+			reason := "during the steady-state route audit"
+			if woke || postWakeAudit {
+				reason = "after system wake"
+			}
+			updates = append(updates, fmt.Sprintf(
+				"managed direct route disappeared %s; pausing TUN capture while it is rebuilt: %v",
+				reason,
+				err,
+			))
+			return updates, &physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
+				"managed direct route validation failed %s; suspending owned routes and invalidating direct source %s",
+				reason,
+				m.route.Source4,
+			)}
+		}
+		if woke {
+			updates = append(updates, fmt.Sprintf(
+				"owner resumed after a %s polling gap; direct routes are present and will be rechecked for delayed macOS route flushing",
+				pollGap.Round(time.Millisecond),
+			))
+		}
 	}
 	// Source and gateway must belong to the same stable snapshot. Debouncing on
 	// Source4 alone can accidentally combine a newly acquired address with a

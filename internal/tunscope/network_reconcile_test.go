@@ -457,6 +457,23 @@ func TestPrimaryInterfaceIPv4UsesIPConfigAddress(t *testing.T) {
 	}
 }
 
+func TestVerifyDirectScopedRoutesRejectsDefaultRouteFallback(t *testing.T) {
+	runner := &liveMonitorRunner{
+		routeGateway:      "192.168.1.1",
+		routeIface:        "en0",
+		scopedRouteTarget: "default",
+		scopedRouteMask:   "default",
+	}
+	routes := []Route{{
+		Family: "inet", Kind: "net", Target: "1.0.0.0/8",
+		Gateway: "192.168.1.1", Scope: "en0", Purpose: "direct-scope",
+	}}
+	err := verifyDirectScopedRoutes(runner, routes)
+	if err == nil || !strings.Contains(err.Error(), "resolved as 0.0.0.0/0") {
+		t.Fatalf("default-route fallback verification error = %v", err)
+	}
+}
+
 func TestFailedReconcileJournalCleansBothGatewayCandidates(t *testing.T) {
 	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
 	cfg := reconcileTestConfig()
@@ -507,6 +524,8 @@ type liveMonitorRunner struct {
 	routeErr           error
 	scopedRouteGateway string
 	scopedRouteIface   string
+	scopedRouteTarget  string
+	scopedRouteMask    string
 	scopedRouteErr     error
 	dnsServer          string
 	dnsOutput          string
@@ -527,7 +546,7 @@ func (r *liveMonitorRunner) Run(name string, args ...string) (string, error) {
 		}
 		return fmt.Sprintf("gateway: %s\ninterface: %s\n", r.routeGateway, r.routeIface), nil
 	}
-	if name == "/sbin/route" && len(args) >= 5 && args[1] == "get" && args[2] == "-ifscope" {
+	if name == "/sbin/route" && len(args) >= 6 && args[1] == "get" && args[2] == "-net" && args[3] == "-ifscope" {
 		if r.scopedRouteErr != nil {
 			return "", r.scopedRouteErr
 		}
@@ -539,7 +558,22 @@ func (r *liveMonitorRunner) Run(name string, args ...string) (string, error) {
 		if iface == "" {
 			iface = r.routeIface
 		}
-		return fmt.Sprintf("gateway: %s\ninterface: %s\n", gateway, iface), nil
+		destination := r.scopedRouteTarget
+		mask := r.scopedRouteMask
+		if destination == "" || mask == "" {
+			prefix, parseErr := netip.ParsePrefix(args[5])
+			if parseErr != nil || !prefix.Addr().Is4() {
+				return "", fmt.Errorf("invalid scoped network route %q", args[5])
+			}
+			destination = prefix.Masked().Addr().String()
+			bits := prefix.Bits()
+			maskValue := uint32(0)
+			if bits > 0 {
+				maskValue = ^uint32(0) << (32 - bits)
+			}
+			mask = fmt.Sprintf("%d.%d.%d.%d", byte(maskValue>>24), byte(maskValue>>16), byte(maskValue>>8), byte(maskValue))
+		}
+		return fmt.Sprintf("destination: %s\nmask: %s\ngateway: %s\ninterface: %s\n", destination, mask, gateway, iface), nil
 	}
 	if name == "/usr/sbin/scutil" {
 		if r.dnsErr != nil {
@@ -686,6 +720,141 @@ func TestMonitorRepairsScopedRoutesRemovedDuringRecoveryVerification(t *testing.
 	var change *physicalNetworkChangeError
 	if !errors.As(recoveryErr, &change) {
 		t.Fatalf("repaired recovery error = %v, want physicalNetworkChangeError", recoveryErr)
+	}
+}
+
+func TestMonitorRepairsScopedRoutesLostDuringSleepWithoutRouteChange(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	cfg := reconcileTestConfig()
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, snapshot, nil, nil)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &liveMonitorRunner{
+		routeGateway: snapshot.Gateway4,
+		routeIface:   snapshot.Interface,
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  snapshot.Source4,
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(snapshot, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+
+	if _, err := monitor.poll(app, state, cfg); err != nil {
+		t.Fatalf("initial route audit: %v", err)
+	}
+	now = now.Add(networkWakePollGap + time.Millisecond)
+	runner.scopedRouteErr = errors.New("route: writing to routing socket: not in table")
+	updates, err := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
+	if len(updates) != 1 || !strings.Contains(updates[0], "after system wake") {
+		t.Fatalf("wake route-loss updates = %#v", updates)
+	}
+	if !monitor.recoveryPending || monitor.routeUnavailable {
+		t.Fatalf("wake route loss did not enter scoped-route recovery: %#v", monitor)
+	}
+	if !monitor.recoveryStartedAt.Equal(now) {
+		t.Fatalf("recovery started at %s, want %s", monitor.recoveryStartedAt, now)
+	}
+
+	if _, suspendErr := app.suspendOwnedRoutes(state); suspendErr != nil {
+		t.Fatalf("suspend routes after wake route loss: %v", suspendErr)
+	}
+	runner.scopedRouteErr = nil
+	var recoveryErr error
+	for range networkRecoverySampleCount + 1 {
+		now = now.Add(networkPollInterval)
+		_, recoveryErr = monitor.poll(app, state, cfg)
+	}
+	var change *physicalNetworkChangeError
+	if !errors.As(recoveryErr, &change) {
+		t.Fatalf("same-signature wake recovery error = %v, want physicalNetworkChangeError", recoveryErr)
+	}
+	if change.Source4 != snapshot.Source4 || monitor.recoveryPending {
+		t.Fatalf("same-signature wake recovery = %#v / monitor %#v", change, monitor)
+	}
+}
+
+func TestMonitorRechecksScopedRoutesAfterWakeAuditSucceeds(t *testing.T) {
+	cfg := reconcileTestConfig()
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, snapshot, nil, nil)
+	runner := &liveMonitorRunner{
+		routeGateway: snapshot.Gateway4,
+		routeIface:   snapshot.Interface,
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  snapshot.Source4,
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(snapshot, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+
+	if _, err := monitor.poll(app, state, cfg); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(networkWakePollGap + time.Millisecond)
+	updates, err := monitor.poll(app, state, cfg)
+	if err != nil || len(updates) != 1 || !strings.Contains(updates[0], "will be rechecked") {
+		t.Fatalf("successful first wake audit = updates %#v, error %v", updates, err)
+	}
+	if monitor.postWakeRouteAudits != postWakeRouteAuditSamples {
+		t.Fatalf("remaining post-wake audits = %d", monitor.postWakeRouteAudits)
+	}
+
+	// macOS may flush manually-added routes shortly after publishing the same
+	// default route. The next normal poll must audit again instead of waiting for
+	// the five-second steady-state interval.
+	now = now.Add(networkPollInterval)
+	runner.scopedRouteErr = errors.New("route disappeared after wake")
+	updates, err = monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
+	if len(updates) != 1 || !strings.Contains(updates[0], "after system wake") {
+		t.Fatalf("delayed wake flush updates = %#v", updates)
+	}
+}
+
+func TestMonitorAuditsScopedRoutesDuringSteadyState(t *testing.T) {
+	cfg := reconcileTestConfig()
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	dns := []netip.Addr{netip.MustParseAddr("1.1.1.1")}
+	state := reconcileTestState(cfg, snapshot, nil, dns)
+	runner := &liveMonitorRunner{
+		routeGateway: snapshot.Gateway4,
+		routeIface:   snapshot.Interface,
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  snapshot.Source4,
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(snapshot, dns, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+
+	if _, err := monitor.poll(app, state, cfg); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Duration(0)
+	for elapsed+networkPollInterval < directRouteAuditInterval {
+		now = now.Add(networkPollInterval)
+		elapsed += networkPollInterval
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("steady poll at %s: %v", elapsed, err)
+		}
+	}
+	runner.scopedRouteErr = errors.New("route disappeared outside a handoff")
+	now = now.Add(networkPollInterval)
+	updates, err := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
+	if len(updates) != 1 || !strings.Contains(updates[0], "steady-state route audit") {
+		t.Fatalf("steady route-loss updates = %#v", updates)
 	}
 }
 
