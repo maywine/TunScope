@@ -339,10 +339,14 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	var monitor *liveNetworkMonitor
 	var networkTicker *time.Ticker
 	var networkTicks <-chan time.Time
+	var networkEvents <-chan physicalNetworkEvent
 	// Explicit interface/gateway overrides are used when another VPN owns the
 	// system default route. In that mode tunscope cannot infer physical changes
 	// safely, so automatic reconciliation remains disabled.
 	if automaticNetwork {
+		if a.directRouteProbe == nil {
+			a.directRouteProbe = probeBoundDirectIPv4Route
+		}
 		monitor = newLiveNetworkMonitor(
 			initialPhysicalRoute,
 			dnsServers,
@@ -356,6 +360,14 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		networkTicker = time.NewTicker(networkPollInterval)
 		networkTicks = networkTicker.C
 		defer networkTicker.Stop()
+
+		networkWatcher, watcherErr := newPhysicalNetworkEventWatcher(iface)
+		if watcherErr != nil {
+			fmt.Fprintf(a.errOut, "warning: physical-network event monitoring is unavailable; using route polling only: %v\n", watcherErr)
+		} else {
+			networkEvents = networkWatcher.Events()
+			defer func() { _ = networkWatcher.Close() }()
+		}
 	}
 
 activeLoop:
@@ -373,59 +385,20 @@ activeLoop:
 			break activeLoop
 		case <-networkTicks:
 			updates, reconcileErr := monitor.poll(a, state, cfg)
-			for _, update := range updates {
-				fmt.Fprintf(a.out, "network update: %s\n", update)
+			if err := a.handleNetworkReconcileResult(state, engineControl, updates, reconcileErr); err != nil {
+				returnErr = err
+				fmt.Fprintln(a.errOut, returnErr)
+				break activeLoop
 			}
-			if reconcileErr != nil {
-				var networkUnavailable *physicalNetworkUnavailableSignal
-				if errors.As(reconcileErr, &networkUnavailable) {
-					suspended, err := a.suspendOwnedRoutes(state)
-					if err != nil {
-						returnErr = fmt.Errorf("pause TUN routes after physical network loss: %w", err)
-						fmt.Fprintln(a.errOut, returnErr)
-						break activeLoop
-					}
-					closed, err := engineControl.InvalidateNetwork(3 * time.Second)
-					if err != nil {
-						returnErr = fmt.Errorf("invalidate TUN flows after physical network loss: %w", err)
-						fmt.Fprintln(a.errOut, returnErr)
-						break activeLoop
-					}
-					fmt.Fprintf(
-						a.out,
-						"network update: %s; suspended %d owned route(s), cleared the physical source, and closed %d egress flow(s); applications now use the system network until recovery\n",
-						networkUnavailable,
-						suspended,
-						closed,
-					)
-					continue
-				}
-				var networkChange *physicalNetworkChangeError
-				if errors.As(reconcileErr, &networkChange) {
-					if state.RoutesSuspended {
-						fmt.Fprintf(a.out, "network update: %s; physical routes verified, rebinding the engine before TUN capture resumes\n", networkChange)
-					} else {
-						fmt.Fprintf(a.out, "network update: %s; physical routes refreshed, rebinding old flows without dropping TUN capture\n", networkChange)
-					}
-					closed, err := engineControl.RebindNetwork(networkChange.Source4, 3*time.Second)
-					if err != nil {
-						returnErr = fmt.Errorf("rebind TUN flows after physical network change: %w", err)
-						fmt.Fprintln(a.errOut, returnErr)
-						break activeLoop
-					}
-					resumed := 0
-					if state.RoutesSuspended {
-						resumed, err = a.resumeCaptureRoutes(state)
-						if err != nil {
-							returnErr = fmt.Errorf("resume TUN capture after physical network recovery: %w", err)
-							fmt.Fprintln(a.errOut, returnErr)
-							break activeLoop
-						}
-					}
-					fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress flow(s) and restored %d TUN capture route(s)\n", closed, resumed)
-					continue
-				}
-				returnErr = fmt.Errorf("physical network reconciliation failed; stopping TUN to restore normal networking: %w", reconcileErr)
+		case event, ok := <-networkEvents:
+			if !ok {
+				networkEvents = nil
+				fmt.Fprintln(a.errOut, "warning: physical-network event monitor stopped; continuing with route polling")
+				continue
+			}
+			updates, reconcileErr := monitor.handlePhysicalNetworkEvent(event.Description)
+			if err := a.handleNetworkReconcileResult(state, engineControl, updates, reconcileErr); err != nil {
+				returnErr = err
 				fmt.Fprintln(a.errOut, returnErr)
 				break activeLoop
 			}
@@ -439,6 +412,64 @@ activeLoop:
 	}
 	fmt.Fprintln(a.out, "TUN stopped; routes restored")
 	return returnErr
+}
+
+func (a *App) handleNetworkReconcileResult(
+	state *State,
+	engineControl *engineController,
+	updates []string,
+	reconcileErr error,
+) error {
+	for _, update := range updates {
+		fmt.Fprintf(a.out, "network update: %s\n", update)
+	}
+	if reconcileErr == nil {
+		return nil
+	}
+
+	var networkUnavailable *physicalNetworkUnavailableSignal
+	if errors.As(reconcileErr, &networkUnavailable) {
+		suspended, err := a.suspendOwnedRoutes(state)
+		if err != nil {
+			return fmt.Errorf("pause TUN routes after physical network loss: %w", err)
+		}
+		closed, err := engineControl.InvalidateNetwork(3 * time.Second)
+		if err != nil {
+			return fmt.Errorf("invalidate TUN flows after physical network loss: %w", err)
+		}
+		fmt.Fprintf(
+			a.out,
+			"network update: %s; suspended %d owned route(s), cleared the physical source, and closed %d egress flow(s); applications now use the system network until recovery\n",
+			networkUnavailable,
+			suspended,
+			closed,
+		)
+		return nil
+	}
+
+	var networkChange *physicalNetworkChangeError
+	if errors.As(reconcileErr, &networkChange) {
+		if state.RoutesSuspended {
+			fmt.Fprintf(a.out, "network update: %s; physical routes verified, rebinding the engine before TUN capture resumes\n", networkChange)
+		} else {
+			fmt.Fprintf(a.out, "network update: %s; physical routes refreshed, rebinding old flows without dropping TUN capture\n", networkChange)
+		}
+		closed, err := engineControl.RebindNetwork(networkChange.Source4, 3*time.Second)
+		if err != nil {
+			return fmt.Errorf("rebind TUN flows after physical network change: %w", err)
+		}
+		resumed := 0
+		if state.RoutesSuspended {
+			resumed, err = a.resumeCaptureRoutes(state)
+			if err != nil {
+				return fmt.Errorf("resume TUN capture after physical network recovery: %w", err)
+			}
+		}
+		fmt.Fprintf(a.out, "network update: engine acknowledged handoff; closed %d stale egress flow(s) and restored %d TUN capture route(s)\n", closed, resumed)
+		return nil
+	}
+
+	return fmt.Errorf("physical network reconciliation failed; stopping TUN to restore normal networking: %w", reconcileErr)
 }
 
 func validateConfig(cfg Config) (proxyInfo, error) {

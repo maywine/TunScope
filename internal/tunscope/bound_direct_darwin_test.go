@@ -61,6 +61,20 @@ func TestBoundDirectDialerRejectsMissingInterface(t *testing.T) {
 	}
 }
 
+func TestProbeBoundDirectIPv4RouteToLoopback(t *testing.T) {
+	err := probeBoundDirectIPv4RouteTo(
+		"lo0",
+		"127.0.0.1",
+		netip.MustParseAddr("127.0.0.1"),
+	)
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			t.Skipf("sandbox does not permit a UDP route probe: %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
 func TestBoundDirectDialerUpdatesValidatedIPv4Source(t *testing.T) {
 	rawDialer, err := newBoundDirectDialer("lo0", "", "192.0.2.10")
 	if err != nil {

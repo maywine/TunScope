@@ -450,6 +450,23 @@ func verifyDirectScopedRoutes(r commandRunner, routes []Route) error {
 	return nil
 }
 
+func (a *App) verifyDirectPath(snapshot physicalRouteSnapshot, routes []Route) error {
+	direct := directScopedRoutesOnly(routes)
+	if len(direct) == 0 {
+		return nil
+	}
+	if err := verifyDirectScopedRoutes(a.runner, direct); err != nil {
+		return err
+	}
+	if a.directRouteProbe == nil {
+		return nil
+	}
+	if err := a.directRouteProbe(snapshot.Interface, snapshot.Source4); err != nil {
+		return fmt.Errorf("bound direct route probe failed: %w", err)
+	}
+	return nil
+}
+
 type routeChange struct {
 	before Route
 	after  Route
@@ -935,23 +952,28 @@ func directScopedRoutesOnly(routes []Route) []Route {
 	return direct
 }
 
-func (m *liveNetworkMonitor) auditDirectScopedRoutes(r commandRunner, routes []Route, full bool) error {
+func (m *liveNetworkMonitor) auditDirectScopedRoutes(a *App, route physicalRouteSnapshot, routes []Route, full bool) error {
 	direct := directScopedRoutesOnly(routes)
 	if len(direct) == 0 {
 		return nil
 	}
 	if full {
-		if err := verifyDirectScopedRoutes(r, direct); err != nil {
+		if err := verifyDirectScopedRoutes(a.runner, direct); err != nil {
 			return err
 		}
 		m.nextRouteAudit = 0
-		return nil
+	} else {
+		index := m.nextRouteAudit % len(direct)
+		if err := verifyDirectScopedRoutes(a.runner, direct[index:index+1]); err != nil {
+			return err
+		}
+		m.nextRouteAudit = (index + 1) % len(direct)
 	}
-	index := m.nextRouteAudit % len(direct)
-	if err := verifyDirectScopedRoutes(r, direct[index:index+1]); err != nil {
-		return err
+	if a.directRouteProbe != nil {
+		if err := a.directRouteProbe(route.Interface, route.Source4); err != nil {
+			return fmt.Errorf("bound direct route probe failed: %w", err)
+		}
 	}
-	m.nextRouteAudit = (index + 1) % len(direct)
 	return nil
 }
 
@@ -963,6 +985,27 @@ func (m *liveNetworkMonitor) beginDirectRouteRecovery(now time.Time) {
 	m.recoveryPrepared = ""
 	m.recoveryStartedAt = now
 	m.postWakeRouteAudits = 0
+}
+
+// handlePhysicalNetworkEvent covers same-address Wi-Fi roaming and DHCP lease
+// replacement. Those transitions can invalidate the kernel path used by
+// IP_BOUND_IF sockets while leaving the interface, source, gateway, and route
+// table text unchanged. Repeated notifications restart the stability window
+// so physical routes are rebuilt only after the final link/DHCP publication.
+func (m *liveNetworkMonitor) handlePhysicalNetworkEvent(description string) ([]string, error) {
+	if description == "" {
+		description = "macOS reported a physical-network epoch change"
+	}
+	alreadyRecovering := m.recoveryPending || m.routeUnavailable
+	m.beginDirectRouteRecovery(m.now())
+	if alreadyRecovering {
+		return []string{description + "; restarting the physical-route stability window"}, nil
+	}
+	return []string{description + "; pausing TUN capture until physical routes are rebuilt"},
+		&physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
+			"physical-network epoch changed without a new address or gateway; suspending owned routes and invalidating direct source %s",
+			m.route.Source4,
+		)}
 }
 
 // poll samples the route, DNS, and proxy peers independently. In particular,
@@ -1071,7 +1114,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			); err != nil {
 				return updates, err
 			}
-			if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
+			if err := a.verifyDirectPath(route, state.Routes); err != nil {
 				if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
 					return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
 				}
@@ -1084,7 +1127,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			return updates, nil
 		}
 		m.lastRouteAuditAt = pollNow
-		if err := verifyDirectScopedRoutes(a.runner, state.Routes); err != nil {
+		if err := a.verifyDirectPath(route, state.Routes); err != nil {
 			m.recoveryPrepared = ""
 			if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
 				return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
@@ -1130,7 +1173,7 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		// samples and steady-state audits rotate through one prefix at a time to
 		// catch delayed route flushing without spawning nine route(8) processes
 		// every 750 ms.
-		if err := m.auditDirectScopedRoutes(a.runner, state.Routes, woke); err != nil {
+		if err := m.auditDirectScopedRoutes(a, route, state.Routes, woke); err != nil {
 			m.beginDirectRouteRecovery(pollNow)
 			reason := "during the steady-state route audit"
 			if woke || postWakeAudit {

@@ -6,9 +6,10 @@ import "io"
 // type. Darwin and Windows provide separate implementations of Up, Down,
 // Status, and Doctor while sharing the proxy and data-plane packages.
 type App struct {
-	runner commandRunner
-	out    io.Writer
-	errOut io.Writer
+	runner           commandRunner
+	out              io.Writer
+	errOut           io.Writer
+	directRouteProbe func(interfaceName, source4 string) error
 }
 
 func New(out, errOut io.Writer) *App {

@@ -145,6 +145,56 @@ type boundDirectPacketConn struct {
 	net.PacketConn
 }
 
+// probeBoundDirectIPv4Route performs the same source-address and IP_BOUND_IF
+// route lookup used by unselected applications without sending a packet. A
+// connected UDP socket asks XNU to resolve and cache the egress route during
+// connect(2), which exposes stale interface-scoped routes that route(8) can
+// still print after a Wi-Fi roam.
+func probeBoundDirectIPv4Route(interfaceName, source4 string) error {
+	return probeBoundDirectIPv4RouteTo(
+		interfaceName,
+		source4,
+		netip.MustParseAddr("192.0.2.1"),
+	)
+}
+
+func probeBoundDirectIPv4RouteTo(interfaceName, source4 string, destination netip.Addr) error {
+	if interfaceName == "" {
+		return fmt.Errorf("an IPv4 direct interface is required")
+	}
+	iface, err := net.InterfaceByName(interfaceName)
+	if err != nil {
+		return fmt.Errorf("find IPv4 direct interface %s: %w", interfaceName, err)
+	}
+	source, err := netip.ParseAddr(source4)
+	if err != nil || !source.Is4() || source.IsUnspecified() {
+		return fmt.Errorf("direct IPv4 probe source is not usable: %q", source4)
+	}
+	if !destination.IsValid() || !destination.Is4() || destination.IsUnspecified() {
+		return fmt.Errorf("direct IPv4 probe destination is not usable: %q", destination)
+	}
+
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
+	if err != nil {
+		return fmt.Errorf("open direct IPv4 probe socket: %w", err)
+	}
+	unix.CloseOnExec(fd)
+	defer unix.Close(fd)
+	if err := unix.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_BOUND_IF, iface.Index); err != nil {
+		return fmt.Errorf("bind direct IPv4 probe to %s: %w", interfaceName, err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrInet4{Addr: source.Unmap().As4()}); err != nil {
+		return fmt.Errorf("bind direct IPv4 probe source %s: %w", source, err)
+	}
+	if err := unix.Connect(fd, &unix.SockaddrInet4{
+		Port: 9,
+		Addr: destination.Unmap().As4(),
+	}); err != nil {
+		return fmt.Errorf("resolve direct IPv4 route to %s on %s: %w", destination, interfaceName, err)
+	}
+	return nil
+}
+
 func (c *boundDirectPacketConn) WriteTo(payload []byte, addr net.Addr) (int, error) {
 	switch value := addr.(type) {
 	case *M.Addr:

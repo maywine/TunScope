@@ -779,6 +779,112 @@ func TestMonitorRepairsScopedRoutesLostDuringSleepWithoutRouteChange(t *testing.
 	}
 }
 
+func TestMonitorRefreshesSameSignatureAfterPhysicalNetworkEvent(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	cfg := reconcileTestConfig()
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, snapshot, nil, nil)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &liveMonitorRunner{
+		routeGateway: snapshot.Gateway4,
+		routeIface:   snapshot.Interface,
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  snapshot.Source4,
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(snapshot, nil, nil, nil, false, true, false, 0)
+	now := time.Unix(1_700_000_000, 0)
+	monitor.now = func() time.Time { return now }
+
+	updates, err := monitor.handlePhysicalNetworkEvent("macOS reported a Wi-Fi link epoch change on en0")
+	requireNetworkUnavailableSignal(t, err)
+	if len(updates) != 1 || !strings.Contains(updates[0], "pausing TUN capture") {
+		t.Fatalf("first physical-network event updates = %#v", updates)
+	}
+	if !monitor.recoveryPending || !monitor.recoveryStartedAt.Equal(now) {
+		t.Fatalf("physical-network event did not enter recovery: %#v", monitor)
+	}
+	if _, suspendErr := app.suspendOwnedRoutes(state); suspendErr != nil {
+		t.Fatalf("suspend routes after physical-network event: %v", suspendErr)
+	}
+
+	// Two apparently stable samples are not enough to recover. A later DHCP
+	// publication from the same roam must restart the stability window even
+	// though the address and gateway remain identical.
+	for range networkRecoverySampleCount - 1 {
+		now = now.Add(networkPollInterval)
+		if _, pollErr := monitor.poll(app, state, cfg); pollErr != nil {
+			t.Fatalf("pre-DHCP stability poll: %v", pollErr)
+		}
+	}
+	now = now.Add(100 * time.Millisecond)
+	updates, err = monitor.handlePhysicalNetworkEvent("macOS reported a DHCP epoch change on en0")
+	if err != nil || len(updates) != 1 || !strings.Contains(updates[0], "restarting the physical-route stability window") {
+		t.Fatalf("repeated physical-network event = updates %#v, error %v", updates, err)
+	}
+	if !monitor.recoveryStartedAt.Equal(now) || monitor.recoveryPrepared != "" {
+		t.Fatalf("repeated event did not reset recovery: %#v", monitor)
+	}
+
+	var recoveryErr error
+	for range networkRecoverySampleCount + 1 {
+		now = now.Add(networkPollInterval)
+		_, recoveryErr = monitor.poll(app, state, cfg)
+	}
+	var change *physicalNetworkChangeError
+	if !errors.As(recoveryErr, &change) {
+		t.Fatalf("same-signature event recovery error = %v, want physicalNetworkChangeError", recoveryErr)
+	}
+	if change.Source4 != snapshot.Source4 || monitor.recoveryPending {
+		t.Fatalf("same-signature event recovery = %#v / monitor %#v", change, monitor)
+	}
+	if !state.RoutesSuspended {
+		t.Fatal("monitor restored capture routes before the engine rebind acknowledgement")
+	}
+}
+
+func TestMonitorRecoversWhenBoundRouteProbeFailsButRoutesRemainListed(t *testing.T) {
+	cfg := reconcileTestConfig()
+	snapshot := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, snapshot, nil, nil)
+	runner := &liveMonitorRunner{
+		routeGateway: snapshot.Gateway4,
+		routeIface:   snapshot.Interface,
+		dnsServer:    "1.1.1.1",
+		ipv4Address:  snapshot.Source4,
+	}
+	probeCalls := 0
+	app := &App{
+		runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{},
+		directRouteProbe: func(interfaceName, source4 string) error {
+			probeCalls++
+			if interfaceName != snapshot.Interface || source4 != snapshot.Source4 {
+				t.Fatalf("probe route = %s/%s, want %s/%s", interfaceName, source4, snapshot.Interface, snapshot.Source4)
+			}
+			return errors.New("connect: network is unreachable")
+		},
+	}
+	monitor := newLiveNetworkMonitor(snapshot, nil, nil, nil, false, true, false, 0)
+
+	updates, err := monitor.poll(app, state, cfg)
+	requireNetworkUnavailableSignal(t, err)
+	if probeCalls != 1 {
+		t.Fatalf("bound route probe calls = %d, want 1", probeCalls)
+	}
+	if len(updates) != 1 || !strings.Contains(updates[0], "bound direct route probe failed") {
+		t.Fatalf("bound route failure updates = %#v", updates)
+	}
+	if !monitor.recoveryPending {
+		t.Fatal("bound route failure did not enter recovery")
+	}
+}
+
 func TestMonitorRechecksScopedRoutesAfterWakeAuditSucceeds(t *testing.T) {
 	cfg := reconcileTestConfig()
 	snapshot := physicalRouteSnapshot{
