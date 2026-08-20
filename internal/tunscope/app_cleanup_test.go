@@ -120,6 +120,58 @@ func TestCleanupTreatsMissingRouteAsSuccess(t *testing.T) {
 	}
 }
 
+func TestCleanupTransitionsDirectlyToAutomaticRestartState(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	state := cleanupTestState(Route{
+		Family: "inet", Kind: "net", Target: "8.0.0.0/5", Gateway: tunGateway4, Purpose: "tun",
+	})
+	state.OwnerToken = "owner-token"
+	state.Device = "utun123"
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	waiting := automaticRestartWaitingState(state)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+
+	if err := app.cleanupToState(state, nil, waiting); err != nil {
+		t.Fatalf("cleanup to automatic restart state: %v", err)
+	}
+	persisted, err := loadState()
+	if err != nil {
+		t.Fatalf("load automatic restart state: %v", err)
+	}
+	if persisted.Phase != "waiting_network" || persisted.OwnerToken != "owner-token" ||
+		persisted.EnginePID != 0 || len(persisted.Routes) != 0 || !persisted.RoutesSuspended {
+		t.Fatalf("automatic restart state = %#v", persisted)
+	}
+}
+
+func TestCleanupFailureCannotReplaceLedgerWithAutomaticRestartState(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	state := cleanupTestState(Route{
+		Family: "inet", Kind: "net", Target: "8.0.0.0/5", Gateway: tunGateway4, Purpose: "tun",
+	})
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	waiting := automaticRestartWaitingState(state)
+	app := &App{
+		runner: &cleanupRunner{errs: []error{errors.New("routing socket unavailable")}},
+		out:    &bytes.Buffer{}, errOut: &bytes.Buffer{},
+	}
+
+	if err := app.cleanupToState(state, nil, waiting); err == nil {
+		t.Fatal("cleanup failure unexpectedly entered automatic recovery")
+	}
+	persisted, err := loadState()
+	if err != nil {
+		t.Fatalf("load retained cleanup ledger: %v", err)
+	}
+	if persisted.Phase != "cleanup_failed" || len(persisted.Routes) != 1 {
+		t.Fatalf("retained cleanup state = %#v", persisted)
+	}
+}
+
 func TestSuspendAndResumeOwnedRoutesAroundNetworkRecovery(t *testing.T) {
 	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
 	physical := Route{
@@ -409,6 +461,298 @@ func TestStatusRequiresLockTokenAndBirthIdentity(t *testing.T) {
 	}
 	if !strings.Contains(staleOutput.String(), "status: stale") || !strings.Contains(staleOutput.String(), "birth identity changed") {
 		t.Fatalf("reused PID status output = %q, want stale identity diagnostic", staleOutput.String())
+	}
+}
+
+func TestStatusRecognizesOwnedAutomaticRestartStateWithoutEngine(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	identity, err := readProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := automaticRestartWaitingState(cleanupTestState())
+	state.OwnerToken = currentLockToken()
+	state.OwnerStartedAt = identity.StartedAt
+	state.OwnerCommand = identity.Command
+	state.EnginePID = 0
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	app := &App{runner: &cleanupRunner{}, out: &output, errOut: &bytes.Buffer{}}
+	if err := app.Status(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "status: waiting-network") ||
+		!strings.Contains(output.String(), "system routes are restored") {
+		t.Fatalf("waiting status output = %q", output.String())
+	}
+
+	state.OwnerStartedAt = state.OwnerStartedAt.Add(time.Microsecond)
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := app.Status(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "status: stale") ||
+		!strings.Contains(output.String(), "owner PID birth identity changed") {
+		t.Fatalf("invalid waiting owner status output = %q", output.String())
+	}
+}
+
+func TestAutomaticRestartWaitRequiresConsecutiveStableSamples(t *testing.T) {
+	signatures := []struct {
+		value string
+		err   error
+	}{
+		{value: "network-a"},
+		{value: "network-a"},
+		{err: errors.New("route disappeared")},
+		{value: "network-a"},
+		{value: "network-b"},
+		{value: "network-b"},
+		{value: "network-b"},
+	}
+	calls := 0
+	sig := waitForStablePhysicalNetwork(
+		make(chan os.Signal),
+		0,
+		time.Millisecond,
+		func() (string, error) {
+			result := signatures[calls]
+			calls++
+			return result.value, result.err
+		},
+		func() bool { return true },
+	)
+	if sig != nil || calls != len(signatures) {
+		t.Fatalf("stable wait = signal %v after %d calls, want %d", sig, calls, len(signatures))
+	}
+}
+
+func TestAutomaticRestartWaitIsImmediatelyCancellable(t *testing.T) {
+	sigCh := make(chan os.Signal, 1)
+	sigCh <- syscall.SIGTERM
+	samples := 0
+	sig := waitForStablePhysicalNetwork(
+		sigCh,
+		time.Hour,
+		time.Millisecond,
+		func() (string, error) {
+			samples++
+			return "network", nil
+		},
+		func() bool { return true },
+	)
+	if sig != syscall.SIGTERM || samples != 0 {
+		t.Fatalf("cancelled wait = signal %v, samples %d", sig, samples)
+	}
+}
+
+func TestAutomaticRestartDelayIsCapped(t *testing.T) {
+	if got := automaticRestartDelay(0); got != 0 {
+		t.Fatalf("initial restart delay = %s", got)
+	}
+	if got := automaticRestartDelay(1); got != time.Second {
+		t.Fatalf("first retry delay = %s", got)
+	}
+	if got := automaticRestartDelay(100); got != 30*time.Second {
+		t.Fatalf("capped retry delay = %s", got)
+	}
+}
+
+func ownedAutomaticRestartTestState(t *testing.T) *State {
+	t.Helper()
+	identity, err := readProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := automaticRestartWaitingState(cleanupTestState())
+	state.OwnerToken = currentLockToken()
+	state.OwnerStartedAt = identity.StartedAt
+	state.OwnerCommand = identity.Command
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestAutomaticRestartSupervisorRebuildsAfterSafeMarker(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	var delays []time.Duration
+	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+		runSession: func(restartState *State) error {
+			runs++
+			if runs == 1 {
+				ownedAutomaticRestartTestState(t)
+				return &automaticRestartRequest{cause: errors.New("physical network changed")}
+			}
+			if restartState == nil || restartState.Phase != "recovering" {
+				t.Fatalf("restart state = %#v", restartState)
+			}
+			return nil
+		},
+		waitNetwork: func(delay time.Duration) os.Signal {
+			delays = append(delays, delay)
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("automatic restart supervisor: %v", err)
+	}
+	if runs != 2 || len(delays) != 1 || delays[0] != 0 {
+		t.Fatalf("restart runs = %d, delays = %v", runs, delays)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state after successful restart = %v", err)
+	}
+}
+
+func TestAutomaticRestartSupervisorBacksOffAfterReadinessFailure(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	var delays []time.Duration
+	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+		runSession: func(*State) error {
+			runs++
+			switch runs {
+			case 1:
+				ownedAutomaticRestartTestState(t)
+				return &automaticRestartRequest{cause: errors.New("network timeout")}
+			case 2:
+				return &automaticRestartAttemptError{cause: errors.New("SOCKS5 is not ready")}
+			default:
+				return nil
+			}
+		},
+		waitNetwork: func(delay time.Duration) os.Signal {
+			delays = append(delays, delay)
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("automatic restart retry: %v", err)
+	}
+	if runs != 3 || len(delays) != 2 || delays[0] != 0 || delays[1] != time.Second {
+		t.Fatalf("restart runs = %d, delays = %v", runs, delays)
+	}
+}
+
+func TestAutomaticRestartSupervisorRetriesWhileOldInterfaceRemains(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	interfaceChecks := 0
+	var delays []time.Duration
+	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+		runSession: func(*State) error {
+			runs++
+			if runs == 1 {
+				ownedAutomaticRestartTestState(t)
+				return &automaticRestartRequest{cause: errors.New("network timeout")}
+			}
+			return nil
+		},
+		waitNetwork: func(delay time.Duration) os.Signal {
+			delays = append(delays, delay)
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) {
+			interfaceChecks++
+			if interfaceChecks == 1 {
+				return nil, errors.New("old utun still exists")
+			}
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("automatic interface retry: %v", err)
+	}
+	if runs != 2 || interfaceChecks != 2 || len(delays) != 2 || delays[0] != 0 || delays[1] != time.Second {
+		t.Fatalf("runs=%d interface checks=%d delays=%v", runs, interfaceChecks, delays)
+	}
+}
+
+func TestAutomaticRestartSupervisorStopsWhileWaiting(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+		runSession: func(*State) error {
+			runs++
+			ownedAutomaticRestartTestState(t)
+			return &automaticRestartRequest{cause: errors.New("network timeout")}
+		},
+		waitNetwork:       func(time.Duration) os.Signal { return syscall.SIGTERM },
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("cancel automatic restart: %v", err)
+	}
+	if runs != 1 {
+		t.Fatalf("session runs after cancellation = %d", runs)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state after cancellation = %v", err)
+	}
+}
+
+func TestAutomaticRestartSupervisorDoesNotRetryFatalSessionError(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+		runSession: func(*State) error {
+			runs++
+			if runs == 1 {
+				ownedAutomaticRestartTestState(t)
+				return &automaticRestartRequest{cause: errors.New("network timeout")}
+			}
+			return errors.New("persist route journal: disk unavailable")
+		},
+		waitNetwork:       func(time.Duration) os.Signal { return nil },
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "disk unavailable") {
+		t.Fatalf("fatal restart result = %v", err)
+	}
+	if runs != 2 {
+		t.Fatalf("session runs after fatal error = %d", runs)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("automatic restart marker after fatal error = %v", err)
 	}
 }
 

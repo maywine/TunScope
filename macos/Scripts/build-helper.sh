@@ -6,6 +6,11 @@ PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 OUTPUT_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 OUTPUT="$OUTPUT_DIR/tunscope"
 
+if [ -z "${TUNSCOPE_VERSION:-}" ]; then
+    echo "TUNSCOPE_VERSION is required to build the bundled helper" >&2
+    exit 1
+fi
+
 ARCH_LIST=${ARCHS:-${CURRENT_ARCH:-$(uname -m)}}
 case "$ARCH_LIST" in
     *undefined_arch*) ARCH_LIST=${NATIVE_ARCH_ACTUAL:-$(uname -m)} ;;
@@ -26,7 +31,7 @@ for ARCH in $ARCH_LIST; do
     BINARY="$TEMP_DIR/tunscope-$ARCH"
     CGO_ENABLED=1 GOOS=darwin GOARCH="$GO_ARCH" \
         MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}" \
-        go build -trimpath -ldflags "-s -w" -o "$BINARY" ./cmd/tunscope
+        go build -trimpath -ldflags "-s -w -X main.version=$TUNSCOPE_VERSION" -o "$BINARY" ./cmd/tunscope
     LIPO_INPUTS="$LIPO_INPUTS $BINARY"
     ARCH_COUNT=$((ARCH_COUNT + 1))
 done

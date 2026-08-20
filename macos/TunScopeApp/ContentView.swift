@@ -42,8 +42,13 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("TunScope")
-                    .font(.largeTitle.bold())
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Text("TunScope")
+                        .font(.largeTitle.bold())
+                    Text(controller.versionText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 Text("管理员 TUN · 选定应用透明转发到本地 SOCKS5")
                     .foregroundStyle(.secondary)
             }
@@ -58,14 +63,14 @@ struct ContentView: View {
             HStack {
                 TextField("socks5://127.0.0.1:7890", text: $controller.proxyURL)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(controller.status == .active)
+                    .disabled(!controller.canEditConfiguration)
                 Button("测试", systemImage: "stethoscope") {
                     controller.testProxy()
                 }
-                .disabled(controller.isBusy || controller.status == .active)
+                .disabled(!controller.canEditConfiguration)
             }
             Toggle("TCP 稳定模式（阻断所选应用的全部非 DNS UDP）", isOn: $controller.tcpOnly)
-                .disabled(controller.status == .active)
+                .disabled(!controller.canEditConfiguration)
             HStack {
                 Text("默认开启，Chrome 会避开曾出现超时的 QUIC 并通过 SOCKS5 TCP 访问；需要代理 UDP/游戏时可关闭。代理失败时不会回落直连。")
                     .font(.caption)
@@ -74,7 +79,7 @@ struct ContentView: View {
             }
             .padding(.top, 4)
             Toggle("ICMP 直连（让 ping 绕过 SOCKS5）", isOn: $controller.icmpDirect)
-                .disabled(controller.status == .active)
+                .disabled(!controller.canEditConfiguration)
             HStack {
                 Text("ICMP 没有可可靠匹配进程的端口信息；开启后，所有应用的 Echo 请求都会从物理接口直连，并在网络切换期间暂停。")
                     .font(.caption)
@@ -120,7 +125,7 @@ struct ContentView: View {
                                 }
                                 .buttonStyle(.borderless)
                                 .help("移除 \(app.displayName)")
-                                .disabled(controller.status == .active)
+                                .disabled(!controller.canEditConfiguration)
                             }
                         }
                         .onDelete(perform: controller.removeApplications)
@@ -132,7 +137,7 @@ struct ContentView: View {
                     Button("添加应用…", systemImage: "plus") {
                         controller.addApplications()
                     }
-                    .disabled(controller.status == .active)
+                    .disabled(!controller.canEditConfiguration)
                     Spacer()
                     Text("按可执行路径和父进程匹配")
                         .font(.caption)
@@ -174,7 +179,7 @@ struct ContentView: View {
             if controller.isBusy {
                 ProgressView().controlSize(.small)
             }
-            if controller.status == .active || controller.status == .stale {
+            if controller.status != .stopped {
                 Button("停止 TUN") { controller.stop() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(!controller.canStop)
@@ -189,6 +194,7 @@ struct ContentView: View {
     private var statusSymbol: String {
         switch controller.status {
         case .active: return "checkmark.shield.fill"
+        case .waitingNetwork: return "arrow.triangle.2.circlepath"
         case .starting, .stopping: return "clock"
         case .stale: return "exclamationmark.triangle.fill"
         case .stopped: return "circle"
@@ -198,6 +204,7 @@ struct ContentView: View {
     private var statusColor: Color {
         switch controller.status {
         case .active: return .green
+        case .waitingNetwork: return .orange
         case .stale: return .orange
         default: return .secondary
         }

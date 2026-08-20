@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -44,9 +45,31 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        VersionText.Text = $"v{ApplicationVersion()}";
         ApplicationsListBox.ItemsSource = _applications;
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += async (_, _) => await RefreshStatusAsync();
+    }
+
+    private static string ApplicationVersion()
+    {
+        var assembly = typeof(MainWindow).Assembly;
+        var informationalVersionAttribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        var informationalVersion = informationalVersionAttribute?.InformationalVersion.Trim();
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            // The SDK can append a source revision as SemVer build metadata.
+            // Keep the product and prerelease portion concise in the UI.
+            var metadataSeparator = informationalVersion.IndexOf('+');
+            return metadataSeparator >= 0
+                ? informationalVersion[..metadataSeparator]
+                : informationalVersion;
+        }
+
+        var version = assembly.GetName().Version;
+        return version == null
+            ? "未知"
+            : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)

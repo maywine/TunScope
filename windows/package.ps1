@@ -25,20 +25,35 @@ if (-not [string]::IsNullOrWhiteSpace($GuiBinary)) {
     }
 }
 
+$versionOutput = (& $resolvedBinary version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to read the TunScope version from $resolvedBinary"
+}
+$versionMatch = [regex]::Match($versionOutput, '^tunscope\s+(.+)$')
+if (-not $versionMatch.Success) {
+    throw "Unexpected TunScope version output: $versionOutput"
+}
+$binaryVersion = $versionMatch.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $versionOutput = (& $resolvedBinary version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to read the TunScope version from $resolvedBinary"
-    }
-    $versionMatch = [regex]::Match($versionOutput, '^tunscope\s+(.+)$')
-    if (-not $versionMatch.Success) {
-        throw "Unexpected TunScope version output: $versionOutput"
-    }
-    $Version = $versionMatch.Groups[1].Value
+    $Version = $binaryVersion
+}
+elseif ($Version -cne $binaryVersion) {
+    throw "Requested package version $Version does not match tunscope.exe version $binaryVersion"
 }
 
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
     throw "Version must be a semantic version without a leading v: $Version"
+}
+
+if ($null -ne $resolvedGuiBinary) {
+    $guiVersion = ([System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedGuiBinary)).ProductVersion
+    if ([string]::IsNullOrWhiteSpace($guiVersion)) {
+        throw "Unable to read the TunScope GUI product version from $resolvedGuiBinary"
+    }
+    $guiVersion = ($guiVersion -split '\+', 2)[0]
+    if ($guiVersion -cne $Version) {
+        throw "TunScope.GUI.exe version $guiVersion does not match tunscope.exe version $Version"
+    }
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot

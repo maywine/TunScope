@@ -77,6 +77,28 @@ func (e *physicalRouteUnavailableError) Unwrap() error {
 	return e.err
 }
 
+// physicalNetworkRestartError marks a network transition that cannot be
+// repaired safely inside the current engine session. The owner may tear down
+// that session, leave the system routing table untouched, and rebuild only
+// after the physical path has stabilized. Other reconciliation failures remain
+// fatal so disk, state-journal, and routing-command errors cannot enter a
+// restart loop.
+type physicalNetworkRestartError struct {
+	err error
+}
+
+func (e *physicalNetworkRestartError) Error() string {
+	return e.err.Error()
+}
+
+func (e *physicalNetworkRestartError) Unwrap() error {
+	return e.err
+}
+
+func restartAfterPhysicalNetworkStabilizes(err error) error {
+	return &physicalNetworkRestartError{err: err}
+}
+
 func physicalAddressesChanged(before, after physicalRouteSnapshot) bool {
 	// Only the primary address XNU actually chooses for the IPv4 default route
 	// is relevant. Secondary aliases and IPv6 privacy-address rotation must not
@@ -1063,11 +1085,11 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			m.routeUnavailable = true
 			m.recoveryPending = true
 			if m.routeUnavailableFor >= networkUnavailableGrace {
-				return updates, fmt.Errorf(
+				return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
 					"physical network remained unavailable for %s of full-wake time: %w",
 					networkUnavailableGrace,
 					unavailable,
-				)
+				))
 			}
 			if firstUnavailable {
 				return updates, &physicalNetworkUnavailableSignal{Description: fmt.Sprintf(
@@ -1093,10 +1115,14 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			return updates, nil
 		}
 		if route.Interface != m.route.Interface {
-			return updates, fmt.Errorf("physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface,
+			))
 		}
 		if m.includeIPv6 && route.Interface6 != m.route.Interface6 {
-			return updates, fmt.Errorf("physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6,
+			))
 		}
 		bypasses, err := m.currentBypasses()
 		if err != nil {
@@ -1116,7 +1142,9 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 			}
 			if err := a.verifyDirectPath(route, state.Routes); err != nil {
 				if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
-					return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
+					return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+						"replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err,
+					))
 				}
 				updates = append(updates, fmt.Sprintf("replacement physical routes are not ready; retrying without rebinding applications: %v", err))
 				return updates, nil
@@ -1130,7 +1158,9 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 		if err := a.verifyDirectPath(route, state.Routes); err != nil {
 			m.recoveryPrepared = ""
 			if !m.recoveryStartedAt.IsZero() && pollNow.Sub(m.recoveryStartedAt) >= networkRecoveryGrace {
-				return updates, fmt.Errorf("replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err)
+				return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+					"replacement physical routes remained unusable for %s: %w", networkRecoveryGrace, err,
+				))
 			}
 			updates = append(updates, fmt.Sprintf("macOS removed a replacement scoped route during handoff verification; scheduling another refresh: %v", err))
 			return updates, nil
@@ -1203,10 +1233,14 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 	addressSignature := observationSignature(route.signature(), routeErr)
 	if m.addressObservation.observe(addressSignature) && routeErr == nil && physicalAddressesChanged(m.route, route) {
 		if route.Interface != m.route.Interface {
-			return updates, fmt.Errorf("physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface,
+			))
 		}
 		if m.includeIPv6 && route.Interface6 != m.route.Interface6 {
-			return updates, fmt.Errorf("physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6,
+			))
 		}
 		bypasses, err := m.currentBypasses()
 		if err != nil {
@@ -1234,13 +1268,17 @@ func (m *liveNetworkMonitor) poll(a *App, state *State, cfg Config) ([]string, e
 	routeSignature := observationSignature(route.signature(), routeErr)
 	if m.routeObservation.observe(routeSignature) {
 		if routeErr != nil {
-			return updates, routeErr
+			return updates, restartAfterPhysicalNetworkStabilizes(routeErr)
 		}
 		if route.Interface != m.route.Interface {
-			return updates, fmt.Errorf("physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv4 interface changed from %s to %s", m.route.Interface, route.Interface,
+			))
 		}
 		if m.includeIPv6 && route.Interface6 != m.route.Interface6 {
-			return updates, fmt.Errorf("physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6)
+			return updates, restartAfterPhysicalNetworkStabilizes(fmt.Errorf(
+				"physical IPv6 interface changed from %s to %s", m.route.Interface6, route.Interface6,
+			))
 		}
 		bypasses, err := m.currentBypasses()
 		if err != nil {

@@ -4,6 +4,7 @@ enum TunServiceStatus: Equatable {
     case stopped
     case starting
     case active
+    case waitingNetwork
     case stopping
     case stale
 
@@ -12,6 +13,7 @@ enum TunServiceStatus: Equatable {
         case .stopped: return "已停止"
         case .starting: return "正在启动"
         case .active: return "运行中"
+        case .waitingNetwork: return "等待网络恢复"
         case .stopping: return "正在停止"
         case .stale: return "需要清理"
         }
@@ -49,8 +51,22 @@ final class TunController: ObservableObject {
 
     var statusText: String { status.text }
 
+    var versionText: String {
+        let raw = Bundle.main.object(forInfoDictionaryKey: "TunScopeVersion") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        guard let raw else {
+            return "v未知版本"
+        }
+        let version = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return version.isEmpty ? "v未知版本" : "v\(version)"
+    }
+
+    var canEditConfiguration: Bool {
+        !isBusy && status == .stopped
+    }
+
     var canStart: Bool {
-        !isBusy && status != .active && !applications.isEmpty && isValidProxy
+        canEditConfiguration && !applications.isEmpty && isValidProxy
     }
 
     var canStop: Bool {
@@ -58,7 +74,7 @@ final class TunController: ObservableObject {
     }
 
     func addApplications() {
-        guard status != .active else {
+        guard status == .stopped else {
             lastError = "请先停止 TUN，再修改应用列表。"
             return
         }
@@ -77,7 +93,7 @@ final class TunController: ObservableObject {
     }
 
     func removeApplications(at offsets: IndexSet) {
-        guard status != .active else {
+        guard status == .stopped else {
             lastError = "请先停止 TUN，再修改应用列表。"
             return
         }
@@ -86,7 +102,7 @@ final class TunController: ObservableObject {
     }
 
     func removeApplication(id: UUID) {
-        guard status != .active else {
+        guard status == .stopped else {
             lastError = "请先停止 TUN，再修改应用列表。"
             return
         }
@@ -151,7 +167,7 @@ final class TunController: ObservableObject {
                 for _ in 0..<24 {
                     try await Task.sleep(for: .milliseconds(250))
                     await refreshStatus()
-                    if status == .active {
+                    if status == .active || status == .waitingNetwork {
                         return
                     }
                 }
@@ -192,6 +208,10 @@ final class TunController: ObservableObject {
             let output = result.output.lowercased()
             if output.contains("status: active") {
                 status = .active
+            } else if output.contains("status: starting") {
+                status = .starting
+            } else if output.contains("status: waiting-network") {
+                status = .waitingNetwork
             } else if output.contains("status: stale") {
                 status = .stale
             } else if output.contains("status: stopped") {

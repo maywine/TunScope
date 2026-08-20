@@ -76,6 +76,24 @@ func requireNetworkUnavailableSignal(t *testing.T, err error) {
 	}
 }
 
+func requirePhysicalNetworkRestart(t *testing.T, err error) {
+	t.Helper()
+	var restart *physicalNetworkRestartError
+	if !errors.As(err, &restart) {
+		t.Fatalf("error = %v, want physicalNetworkRestartError", err)
+	}
+}
+
+func TestNetworkReconcileHandlerPreservesRestartClassification(t *testing.T) {
+	app := &App{runner: &recordingRouteRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	reconcileErr := restartAfterPhysicalNetworkStabilizes(errors.New("physical interface changed"))
+	err := app.handleNetworkReconcileResult(nil, nil, nil, reconcileErr)
+	if err == nil || !strings.Contains(err.Error(), "requires a clean TUN rebuild") {
+		t.Fatalf("handled restart error = %v", err)
+	}
+	requirePhysicalNetworkRestart(t, err)
+}
+
 func TestStableObservationDebouncesTransientValue(t *testing.T) {
 	tracker := newStableObservation(3, "old")
 	if tracker.observe("new") || tracker.observe("new") {
@@ -1000,6 +1018,7 @@ func TestMonitorStopsWhenReplacementScopedRoutesRemainUnusable(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "replacement physical routes remained unusable") {
 		t.Fatalf("expired scoped-route recovery error = %v", err)
 	}
+	requirePhysicalNetworkRestart(t, err)
 }
 
 func TestMonitorPausesImmediatelyEvenIfPreviousSourceRemainsAssigned(t *testing.T) {
@@ -1052,6 +1071,33 @@ func TestMonitorStopsAfterPhysicalNetworkUnavailableGrace(t *testing.T) {
 	if err == nil || errors.As(err, &change) || !strings.Contains(err.Error(), "remained unavailable") {
 		t.Fatalf("expired unavailable grace error = %v", err)
 	}
+	requirePhysicalNetworkRestart(t, err)
+}
+
+func TestMonitorRequestsFullRestartWhenPhysicalInterfaceChanges(t *testing.T) {
+	cfg := reconcileTestConfig()
+	before := physicalRouteSnapshot{
+		Gateway4: "192.168.1.1", Interface: "en0", Source4: "192.168.1.20", IPv4: []string{"192.168.1.20"},
+	}
+	state := reconcileTestState(cfg, before, nil, nil)
+	runner := &liveMonitorRunner{
+		routeGateway: "192.168.1.1",
+		routeIface:   "en7",
+		ipv4Address:  "192.168.1.20",
+	}
+	app := &App{runner: runner, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	monitor := newLiveNetworkMonitor(before, nil, nil, nil, false, true, false, 0)
+
+	for i := 0; i < networkStableSampleCount-1; i++ {
+		if _, err := monitor.poll(app, state, cfg); err != nil {
+			t.Fatalf("interface candidate poll %d: %v", i, err)
+		}
+	}
+	_, err := monitor.poll(app, state, cfg)
+	if err == nil || !strings.Contains(err.Error(), "interface changed from en0 to en7") {
+		t.Fatalf("interface-change error = %v", err)
+	}
+	requirePhysicalNetworkRestart(t, err)
 }
 
 func TestMonitorPausesUnavailableGraceDuringSleepAndDarkWake(t *testing.T) {
@@ -1105,6 +1151,8 @@ func TestMonitorPausesUnavailableGraceDuringSleepAndDarkWake(t *testing.T) {
 	now = now.Add(networkPollInterval)
 	if _, err := monitor.poll(app, state, cfg); err == nil || !strings.Contains(err.Error(), "full-wake time") {
 		t.Fatalf("full-wake grace did not expire: %v", err)
+	} else {
+		requirePhysicalNetworkRestart(t, err)
 	}
 }
 
