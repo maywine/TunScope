@@ -42,7 +42,7 @@ if ([string]::Equals($sourcePath.TrimEnd('\'), $installPath, [System.StringCompa
     throw "SourceDirectory and InstallDirectory must be different: $installPath"
 }
 
-$requiredFiles = @('tunscope.exe', 'wintun.dll')
+$requiredFiles = @('tunscope-cli.exe', 'wintun.dll')
 foreach ($requiredFile in $requiredFiles) {
     $sourceFile = Join-Path $sourcePath $requiredFile
     if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
@@ -50,25 +50,46 @@ foreach ($requiredFile in $requiredFiles) {
     }
 }
 
-$installedExecutable = Join-Path $installPath 'tunscope.exe'
-if (Test-Path -LiteralPath $installedExecutable -PathType Leaf) {
-    $runningInstall = Get-Process -Name 'tunscope' -ErrorAction SilentlyContinue | Where-Object {
+$installedExecutable = Join-Path $installPath 'tunscope-cli.exe'
+$legacyInstalledExecutable = Join-Path $installPath 'tunscope.exe'
+$legacyInstalledGui = Join-Path $installPath 'TunScope.GUI.exe'
+$legacyLayout = Test-Path -LiteralPath $legacyInstalledGui -PathType Leaf
+$installedCliCandidates = @(
+    [pscustomobject]@{ Path = $installedExecutable; ProcessName = 'tunscope-cli' }
+)
+if ($legacyLayout) {
+    $installedCliCandidates += [pscustomobject]@{ Path = $legacyInstalledExecutable; ProcessName = 'tunscope' }
+}
+foreach ($candidate in $installedCliCandidates) {
+    if (-not (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) {
+        continue
+    }
+    $runningInstall = Get-Process -Name $candidate.ProcessName -ErrorAction SilentlyContinue | Where-Object {
         try {
-            [string]::Equals($_.Path, $installedExecutable, [System.StringComparison]::OrdinalIgnoreCase)
+            [string]::Equals($_.Path, $candidate.Path, [System.StringComparison]::OrdinalIgnoreCase)
         }
         catch {
             $false
         }
     }
     if ($runningInstall) {
-        throw "The installed TunScope is running. Stop it manually with '$installedExecutable service stop' (or '$installedExecutable down' for foreground CLI mode), then run the installer again."
+        throw "The installed TunScope is running. Stop it manually with '$($candidate.Path) service stop' (or '$($candidate.Path) down' for foreground CLI mode), then run the installer again."
     }
 }
-$installedGui = Join-Path $installPath 'TunScope.GUI.exe'
-if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
-    $runningGui = Get-Process -Name 'TunScope.GUI' -ErrorAction SilentlyContinue | Where-Object {
+$installedGui = Join-Path $installPath 'TunScope.exe'
+$installedGuiCandidates = if ($legacyLayout) {
+    @([pscustomobject]@{ Path = $legacyInstalledGui; ProcessName = 'TunScope.GUI' })
+}
+else {
+    @([pscustomobject]@{ Path = $installedGui; ProcessName = 'TunScope' })
+}
+foreach ($candidate in $installedGuiCandidates) {
+    if (-not (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) {
+        continue
+    }
+    $runningGui = Get-Process -Name $candidate.ProcessName -ErrorAction SilentlyContinue | Where-Object {
         try {
-            [string]::Equals($_.Path, $installedGui, [System.StringComparison]::OrdinalIgnoreCase)
+            [string]::Equals($_.Path, $candidate.Path, [System.StringComparison]::OrdinalIgnoreCase)
         }
         catch {
             $false
@@ -78,10 +99,13 @@ if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
         throw "The installed TunScope GUI is running. Close it, then run the installer again."
     }
 }
+$existingService = Get-Service -Name 'TunScope' -ErrorAction SilentlyContinue
+if ($legacyLayout -and $SkipServiceInstall -and $null -ne $existingService) {
+    throw 'Upgrading a legacy installation with an existing Windows Service requires updating its executable path. Run install.ps1 without -SkipServiceInstall.'
+}
 
 $packageFiles = @(
-    'tunscope.exe',
-    'TunScope.GUI.exe',
+    'tunscope-cli.exe',
     'wintun.dll',
     'README.md',
     'LICENSE.txt',
@@ -120,7 +144,15 @@ if ($PSCmdlet.ShouldProcess($installPath, 'Install TunScope')) {
         }
     }
 
-    if (-not $SkipStartMenuShortcut -and (Test-Path -LiteralPath $installedGui -PathType Leaf)) {
+    $sourceGui = Join-Path $sourcePath 'TunScope.exe'
+    if (Test-Path -LiteralPath $sourceGui -PathType Leaf) {
+        Copy-Item -LiteralPath $sourceGui -Destination $installedGui -Force
+        if (Test-Path -LiteralPath $legacyInstalledGui -PathType Leaf) {
+            Remove-Item -LiteralPath $legacyInstalledGui -Force
+        }
+    }
+
+    if (-not $SkipStartMenuShortcut -and (Test-Path -LiteralPath $sourceGui -PathType Leaf)) {
         $programsDirectory = [Environment]::GetFolderPath('CommonPrograms')
         if ([string]::IsNullOrWhiteSpace($programsDirectory)) {
             $programsDirectory = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
@@ -138,6 +170,6 @@ if ($PSCmdlet.ShouldProcess($installPath, 'Install TunScope')) {
     }
 
     Write-Host "Installed TunScope at $installPath"
-    Write-Host "Open TunScope.GUI.exe to save a config and start the service, or run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890'."
+    Write-Host "Open TunScope.exe to save a config and start the service, or run '$installedExecutable doctor --proxy socks5://127.0.0.1:7890'."
     Write-Host 'The installer did not start or stop the TunScope data plane.'
 }

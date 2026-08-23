@@ -28,7 +28,7 @@ open macos/TunScope.xcodeproj
 Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。自包含的 WPF GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
 
 ```powershell
-.\tunscope.exe up `
+.\tunscope-cli.exe up `
   --proxy socks5://127.0.0.1:7890 `
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```

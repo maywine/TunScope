@@ -5,7 +5,7 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>TunScope.GUI</AssemblyName>
+    <AssemblyName>TunScope</AssemblyName>
     <RootNamespace>TunScope.GUI</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\TunScope.ico</ApplicationIcon>

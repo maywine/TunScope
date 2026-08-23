@@ -50,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = (& .\bin\tunscope-windows-amd64.exe version | Out-String).Trim()
-          if ($actual -ne 'tunscope 0.3.12') {
+          if ($actual -ne 'tunscope 0.3.13') {
             throw "Unexpected version output: $actual"
           }
       - name: Build self-contained Windows GUI
@@ -60,9 +60,9 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained true `
-            -p:Version=0.3.12 `
+            -p:Version=0.3.13 `
             -o .\bin\windows-gui
-          if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.GUI.exe -PathType Leaf)) {
+          if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.exe -PathType Leaf)) {
             throw 'Self-contained GUI executable was not produced'
           }
       - name: Build and inspect Windows package
@@ -70,7 +70,7 @@ jobs:
         run: |
           .\windows\package.ps1 `
             -Binary .\bin\tunscope-windows-amd64.exe `
-            -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
+            -GuiBinary .\bin\windows-gui\TunScope.exe `
             -Destination .\dist
 
           $archives = @(Get-ChildItem -LiteralPath .\dist -Filter '*.zip' -File)
@@ -92,8 +92,8 @@ jobs:
             throw "Expected one package root, found $($packageRoot.Count)"
           }
           $required = @(
-            'tunscope.exe',
-            'TunScope.GUI.exe',
+            'tunscope-cli.exe',
+            'TunScope.exe',
             'wintun.dll',
             'README.md',
             'LICENSE.txt',

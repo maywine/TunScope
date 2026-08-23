@@ -63,9 +63,9 @@ $checksumPath = "$archivePath.sha256"
 
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'tunscope.exe')
+    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'tunscope-cli.exe')
     if ($null -ne $resolvedGuiBinary) {
-        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'TunScope.GUI.exe')
+        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'TunScope.exe')
     }
     Copy-Item -LiteralPath $readme -Destination (Join-Path $stagingDirectory 'README.md')
     Copy-Item -LiteralPath $exampleConfig -Destination (Join-Path $stagingDirectory 'tunscope.example.json')

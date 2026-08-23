@@ -34,7 +34,7 @@ public partial class MainWindow : Window
     private bool _closeInProgress;
     private bool _allowClose;
 
-    private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope.exe");
+    private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope-cli.exe");
     private static string DefaultServiceDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "TunScope",
@@ -53,7 +53,7 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(CliPath))
         {
-            SetStatus("缺少 tunscope.exe", $"GUI 必须与 tunscope.exe 位于同一目录：{CliPath}", StatusKind.Error);
+            SetStatus("缺少 tunscope-cli.exe", $"GUI 必须与 tunscope-cli.exe 位于同一目录：{CliPath}", StatusKind.Error);
             UpdateButtons();
             return;
         }
@@ -330,7 +330,7 @@ public partial class MainWindow : Window
         if (!process.Start())
         {
             process.Dispose();
-            throw new InvalidOperationException("无法启动 tunscope.exe");
+            throw new InvalidOperationException("无法启动 tunscope-cli.exe");
         }
         _portableProcess = process;
         _portableStdoutTask = CapturePortableOutputAsync(process.StandardOutput, standardError: false);
@@ -344,7 +344,7 @@ public partial class MainWindow : Window
                 var exitCode = process.ExitCode;
                 await ReapPortableProcessAsync();
                 throw new InvalidOperationException(
-                    $"便携 TUN 启动失败，tunscope.exe 退出代码为 {exitCode}。\n\n{PortableLogExcerpt()}");
+                    $"便携 TUN 启动失败，tunscope-cli.exe 退出代码为 {exitCode}。\n\n{PortableLogExcerpt()}");
             }
 
             status = await QueryStatusAsync();
@@ -387,7 +387,7 @@ public partial class MainWindow : Window
             }
             catch (OperationCanceledException)
             {
-                throw new TimeoutException("tunscope.exe 收到停止请求后 12 秒内仍未退出；窗口将保持打开以便重试");
+                throw new TimeoutException("tunscope-cli.exe 收到停止请求后 12 秒内仍未退出；窗口将保持打开以便重试");
             }
         }
         await ReapPortableProcessAsync();
@@ -438,7 +438,7 @@ public partial class MainWindow : Window
             _portableStdoutTask = null;
             _portableStderrTask = null;
         }
-        AppendPortableLog($"tunscope.exe 已退出（代码 {exitCode}）。");
+        AppendPortableLog($"tunscope-cli.exe 已退出（代码 {exitCode}）。");
     }
 
     private void ClearPortableLog()
@@ -647,13 +647,13 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(CliPath))
         {
-            throw new FileNotFoundException("找不到 tunscope.exe", CliPath);
+            throw new FileNotFoundException("找不到 tunscope-cli.exe", CliPath);
         }
         var startInfo = CreateCliStartInfo(arguments, standardInput != null);
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
-            throw new InvalidOperationException("无法启动 tunscope.exe");
+            throw new InvalidOperationException("无法启动 tunscope-cli.exe");
         }
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -672,7 +672,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException("tunscope 命令超过 75 秒仍未完成");
+            throw new TimeoutException("tunscope-cli 命令超过 75 秒仍未完成");
         }
         var stdout = (await stdoutTask).Trim();
         var stderr = (await stderrTask).Trim();
