@@ -50,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = (& .\bin\tunscope-windows-amd64.exe version | Out-String).Trim()
-          if ($actual -ne 'tunscope 0.3.13') {
+          if ($actual -ne 'tunscope 0.3.14') {
             throw "Unexpected version output: $actual"
           }
       - name: Build self-contained Windows GUI
@@ -60,10 +60,14 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained true `
-            -p:Version=0.3.13 `
+            -p:Version=0.3.14 `
             -o .\bin\windows-gui
           if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.exe -PathType Leaf)) {
             throw 'Self-contained GUI executable was not produced'
+          }
+          $guiVersion = (Get-Item -LiteralPath .\bin\windows-gui\TunScope.exe).VersionInfo.ProductVersion
+          if ($guiVersion -ne '0.3.14') {
+            throw "Unexpected Windows GUI product version: $guiVersion"
           }
       - name: Build and inspect Windows package
         shell: pwsh

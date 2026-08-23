@@ -18,7 +18,7 @@ Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面�
 下载后先核对压缩包：
 
 ```powershell
-$archive = '.\tunscope-0.3.13-windows-amd64.zip'
+$archive = '.\tunscope-0.3.14-windows-amd64.zip'
 $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
@@ -32,7 +32,7 @@ Expand-Archive $archive -DestinationPath .
 只有明确需要后台服务且目录内包含 `install.ps1` 时才运行安装脚本。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；在管理员 PowerShell 中执行：
 
 ```powershell
-Set-Location .\tunscope-0.3.13-windows-amd64
+Set-Location .\tunscope-0.3.14-windows-amd64
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
 ```
 
@@ -56,6 +56,7 @@ if (-not (Test-Path $cli)) { $cli = "$env:ProgramFiles\TunScope\tunscope.exe" }
 - 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
 - 无需安装服务即可启动、停止、保存并重启 TUN。
 - 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
+- 在窗口标题和左下角显示当前发布版本号。
 
 GUI 将配置通过标准输入交给 `tunscope-cli.exe`，代理用户名和密码不会出现在子进程命令行。完整配置位于 `%ProgramData%\TunScope\service\config.json`；该目录使用受保护 ACL，只允许 LocalSystem 和 Administrators。运行时状态位于 `%ProgramData%\TunScope`，不会保存代理密码。
 
@@ -105,8 +106,8 @@ TunScope\
 CLI 需要 Go 1.23.1+，GUI 构建需要 .NET 8 SDK。在仓库根目录执行：
 
 ```bash
-make windows-amd64 VERSION=0.3.13
-make windows-gui VERSION=0.3.13
+make windows-amd64 VERSION=0.3.14
+make windows-gui VERSION=0.3.14
 ```
 
 产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.exe`。前者复制到 Windows 后应重命名为 `tunscope-cli.exe`。也可以直接构建 CLI：
@@ -124,16 +125,16 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 go build -trimpath -ldflags "-s -w" -o .\bin\tunscope-cli.exe .\cmd\tunscope
 dotnet publish .\windows\gui\TunScope.GUI.csproj `
   -c Release -r win-x64 --self-contained true `
-  -p:Version=0.3.13 -o .\bin\windows-gui
+  -p:Version=0.3.14 -o .\bin\windows-gui
 .\windows\package.ps1 `
   -Binary .\bin\tunscope-cli.exe `
   -GuiBinary .\bin\windows-gui\TunScope.exe `
   -Destination .\dist
 ```
 
-`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.13`。它会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
+`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.14`。它会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
 
-维护者推送形如 `v0.3.13` 或 `v0.3.13-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
+维护者推送形如 `v0.3.14` 或 `v0.3.14-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
 
 ## 前台 CLI 快速开始
 

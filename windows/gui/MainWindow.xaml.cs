@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -44,9 +45,32 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var displayVersion = GetDisplayVersion();
+        Title = $"TunScope {displayVersion}";
+        VersionText.Text = displayVersion;
         ApplicationsListBox.ItemsSource = _applications;
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += async (_, _) => await RefreshStatusAsync();
+    }
+
+    private static string GetDisplayVersion()
+    {
+        var assembly = typeof(MainWindow).Assembly;
+        var versionAttribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        var informationalVersion = versionAttribute?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            var metadataSeparator = informationalVersion.IndexOf('+');
+            var version = metadataSeparator >= 0
+                ? informationalVersion[..metadataSeparator]
+                : informationalVersion;
+            return $"v{version}";
+        }
+
+        var fallback = assembly.GetName().Version;
+        return fallback is { Build: >= 0 }
+            ? $"v{fallback.Major}.{fallback.Minor}.{fallback.Build}"
+            : "版本未知";
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
