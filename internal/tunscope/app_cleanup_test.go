@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -584,6 +586,366 @@ func ownedAutomaticRestartTestState(t *testing.T) *State {
 	return state
 }
 
+func ownedStartingTestState(t *testing.T) *State {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.Proxy = "socks5://user:secret@127.0.0.1:1080"
+	state, err := newOwnerStartingState(cfg, []string{"/Applications/Test.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestStatusRecognizesOwnedStartingState(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	ownedStartingTestState(t)
+	var output bytes.Buffer
+	app := &App{runner: &cleanupRunner{}, out: &output, errOut: &bytes.Buffer{}}
+	if err := app.Status(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "status: starting") ||
+		!strings.Contains(output.String(), "TUN data plane is being initialized") {
+		t.Fatalf("starting status output = %q", output.String())
+	}
+}
+
+func TestOwnedStartingStateRejectsDataPlaneLedger(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	state := ownedStartingTestState(t)
+	state.Routes = []Route{{Family: "inet", Kind: "host", Target: "203.0.113.10", Purpose: "bypass"}}
+	if err := saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOwnedStartingState(); err == nil || !strings.Contains(err.Error(), "cleanup ownership") {
+		t.Fatalf("unsafe starting ledger result = %v", err)
+	}
+}
+
+func TestInitialNetworkReadinessFailureWaitsAndRetries(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	var delays []time.Duration
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(restartState *State) error {
+			runs++
+			if runs == 1 {
+				if restartState != nil {
+					t.Fatalf("initial restart state = %#v, want nil", restartState)
+				}
+				return networkPreflightFailure(nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true})
+			}
+			if restartState == nil || restartState.Phase != "recovering" {
+				t.Fatalf("retry state = %#v", restartState)
+			}
+			return nil
+		},
+		waitNetwork: func(delay time.Duration) os.Signal {
+			delays = append(delays, delay)
+			persisted, loadErr := loadState()
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if persisted.Phase != "waiting_network" || persisted.EnginePID != 0 ||
+				len(persisted.Routes) != 0 || !persisted.RoutesSuspended {
+				t.Fatalf("initial waiting marker = %#v", persisted)
+			}
+			if persisted.Proxy != "socks5://127.0.0.1:1080" {
+				t.Fatalf("persisted proxy = %q", persisted.Proxy)
+			}
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("initial automatic recovery: %v", err)
+	}
+	if runs != 2 || len(delays) != 1 || delays[0] != time.Second {
+		t.Fatalf("runs=%d delays=%v", runs, delays)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state after successful initial retry = %v", err)
+	}
+}
+
+func TestInitialRecoveryStopsRetryingAfterPermanentFailure(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	waits := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(restartState *State) error {
+			runs++
+			if runs == 1 {
+				return networkPreflightFailure(restartState, &net.DNSError{Err: "timeout", IsTimeout: true})
+			}
+			return networkPreflightFailure(restartState, errors.New("rejected username/password"))
+		},
+		waitNetwork: func(time.Duration) os.Signal {
+			waits++
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected username/password") {
+		t.Fatalf("permanent recovery result = %v", err)
+	}
+	if runs != 2 || waits != 1 {
+		t.Fatalf("runs=%d waits=%d", runs, waits)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("marker after permanent recovery failure = %v", err)
+	}
+}
+
+func TestInitialRecoveryBackoffSequenceIsCapped(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	var delays []time.Duration
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(restartState *State) error {
+			runs++
+			if runs <= 6 {
+				return networkPreflightFailure(restartState, &net.DNSError{Err: "timeout", IsTimeout: true})
+			}
+			return nil
+		},
+		waitNetwork: func(delay time.Duration) os.Signal {
+			delays = append(delays, delay)
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("capped initial recovery: %v", err)
+	}
+	wantDelays := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 30 * time.Second}
+	if runs != 7 || !reflect.DeepEqual(delays, wantDelays) {
+		t.Fatalf("runs=%d delays=%v, want %v", runs, delays, wantDelays)
+	}
+}
+
+func TestInitialRetryIsDisabledForExplicitPhysicalConfiguration(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	waits := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: false,
+		runSession: func(*State) error {
+			return networkPreflightFailure(nil, &net.DNSError{Err: "timeout", IsTimeout: true})
+		},
+		waitNetwork: func(time.Duration) os.Signal {
+			waits++
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("explicit physical configuration result = %v", err)
+	}
+	if waits != 0 {
+		t.Fatalf("explicit physical configuration waits = %d", waits)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("starting marker after explicit-mode failure = %v", err)
+	}
+}
+
+func TestInitialFatalPreflightFailureDoesNotRetry(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	waits := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(*State) error {
+			return networkPreflightFailure(nil, errors.New("rejected username/password"))
+		},
+		waitNetwork: func(time.Duration) os.Signal {
+			waits++
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected username/password") {
+		t.Fatalf("fatal initial result = %v", err)
+	}
+	if waits != 0 {
+		t.Fatalf("network waits after fatal initial error = %d", waits)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("starting marker after fatal error = %v", err)
+	}
+}
+
+func TestInitialRetryDoesNotOverwriteCleanupFailure(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	failedRoute := Route{Family: "inet", Kind: "host", Target: "203.0.113.9", Gateway: "192.0.2.1", Purpose: "bypass"}
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	waits := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(*State) error {
+			failed := *starting
+			failed.Phase = "cleanup_failed"
+			failed.Routes = []Route{failedRoute}
+			if saveErr := saveState(&failed); saveErr != nil {
+				t.Fatal(saveErr)
+			}
+			return automaticRestartAttemptFailure(errors.New("network timeout during cleanup"))
+		},
+		waitNetwork: func(time.Duration) os.Signal {
+			waits++
+			return nil
+		},
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsafe phase \"cleanup_failed\"") {
+		t.Fatalf("cleanup failure retry result = %v", err)
+	}
+	if waits != 0 {
+		t.Fatalf("network waits after cleanup failure = %d", waits)
+	}
+	persisted, loadErr := loadState()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if persisted.Phase != "cleanup_failed" || len(persisted.Routes) != 1 || persisted.Routes[0] != failedRoute {
+		t.Fatalf("cleanup failure state was overwritten: %#v", persisted)
+	}
+}
+
+func TestInitialAutomaticRecoveryCanBeCancelled(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	if err := acquireLock(); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLock()
+	starting := ownedStartingTestState(t)
+	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	runs := 0
+	err := app.superviseAutomaticRestart(make(chan os.Signal), starting, automaticRestartSupervisorDeps{
+		allowInitialRetry: true,
+		runSession: func(*State) error {
+			runs++
+			return automaticRestartAttemptFailure(errors.New("trusted DNS timeout"))
+		},
+		waitNetwork:       func(time.Duration) os.Signal { return syscall.SIGTERM },
+		waitInterfaceGone: func() (os.Signal, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("cancel initial recovery: %v", err)
+	}
+	if runs != 1 {
+		t.Fatalf("initial session runs after cancellation = %d", runs)
+	}
+	if _, err := os.Stat(statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state after initial cancellation = %v", err)
+	}
+}
+
+func TestNetworkPreflightFailureClassification(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{name: "timeout", err: &net.DNSError{Err: "timeout", IsTimeout: true}, retryable: true},
+		{name: "SOCKS network unreachable", err: errors.New("CONNECT: network unreachable"), retryable: true},
+		{name: "upstream EOF", err: fmt.Errorf("read trusted DNS response: %w", io.EOF), retryable: true},
+		{name: "authentication", err: errors.New("rejected username/password")},
+		{name: "invalid DNS response", err: errors.New("trusted DNS returned an invalid response")},
+		{name: "unsupported method", err: errors.New("unsupported method")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := networkPreflightFailure(nil, test.err)
+			var retry *automaticRestartAttemptError
+			if got := errors.As(err, &retry); got != test.retryable {
+				t.Fatalf("retryable = %v, want %v; error: %v", got, test.retryable, err)
+			}
+		})
+	}
+	var retry *automaticRestartAttemptError
+	if err := networkPreflightFailure(&State{WasActive: true}, errors.New("rejected username/password")); !errors.As(err, &retry) {
+		t.Fatalf("previously active session did not retain restart behavior: %v", err)
+	}
+}
+
+func TestValidateStartupInputsRejectsStaticErrors(t *testing.T) {
+	base := DefaultConfig()
+	base.Proxy = "socks5://127.0.0.1:1080"
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "proxy", mutate: func(cfg *Config) { cfg.Proxy = "http://127.0.0.1:8080" }, want: "scheme must be socks5"},
+		{name: "device", mutate: func(cfg *Config) { cfg.Device = "tun0" }, want: "--device must look like"},
+		{name: "MTU", mutate: func(cfg *Config) { cfg.MTU = 1000 }, want: "--mtu must be"},
+		{name: "log level", mutate: func(cfg *Config) { cfg.LogLevel = "verbose" }, want: "invalid --log-level"},
+		{name: "trusted DNS", mutate: func(cfg *Config) { cfg.TrustedDNS = "localhost" }, want: "trusted DNS must be"},
+		{name: "gateway", mutate: func(cfg *Config) { cfg.Gateway4 = "not-an-ip" }, want: "--gateway must be"},
+		{name: "TCP only", mutate: func(cfg *Config) { cfg.TCPOnly = true }, want: "requires at least one --app"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := base
+			test.mutate(&cfg)
+			_, _, err := validateStartupInputs(cfg)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestAutomaticRestartSupervisorRebuildsAfterSafeMarker(t *testing.T) {
 	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
 	if err := acquireLock(); err != nil {
@@ -593,7 +955,7 @@ func TestAutomaticRestartSupervisorRebuildsAfterSafeMarker(t *testing.T) {
 	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
 	runs := 0
 	var delays []time.Duration
-	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+	err := app.superviseAutomaticRestart(make(chan os.Signal), nil, automaticRestartSupervisorDeps{
 		runSession: func(restartState *State) error {
 			runs++
 			if runs == 1 {
@@ -631,7 +993,7 @@ func TestAutomaticRestartSupervisorBacksOffAfterReadinessFailure(t *testing.T) {
 	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
 	runs := 0
 	var delays []time.Duration
-	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+	err := app.superviseAutomaticRestart(make(chan os.Signal), nil, automaticRestartSupervisorDeps{
 		runSession: func(*State) error {
 			runs++
 			switch runs {
@@ -668,7 +1030,7 @@ func TestAutomaticRestartSupervisorRetriesWhileOldInterfaceRemains(t *testing.T)
 	runs := 0
 	interfaceChecks := 0
 	var delays []time.Duration
-	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+	err := app.superviseAutomaticRestart(make(chan os.Signal), nil, automaticRestartSupervisorDeps{
 		runSession: func(*State) error {
 			runs++
 			if runs == 1 {
@@ -705,7 +1067,7 @@ func TestAutomaticRestartSupervisorStopsWhileWaiting(t *testing.T) {
 	defer releaseLock()
 	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
 	runs := 0
-	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+	err := app.superviseAutomaticRestart(make(chan os.Signal), nil, automaticRestartSupervisorDeps{
 		runSession: func(*State) error {
 			runs++
 			ownedAutomaticRestartTestState(t)
@@ -733,7 +1095,7 @@ func TestAutomaticRestartSupervisorDoesNotRetryFatalSessionError(t *testing.T) {
 	defer releaseLock()
 	app := &App{runner: &cleanupRunner{}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
 	runs := 0
-	err := app.superviseAutomaticRestart(make(chan os.Signal), automaticRestartSupervisorDeps{
+	err := app.superviseAutomaticRestart(make(chan os.Signal), nil, automaticRestartSupervisorDeps{
 		runSession: func(*State) error {
 			runs++
 			if runs == 1 {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -33,11 +34,67 @@ type automaticRestartAttemptError struct {
 func (e *automaticRestartAttemptError) Error() string { return e.cause.Error() }
 func (e *automaticRestartAttemptError) Unwrap() error { return e.cause }
 
-func restartPreflightFailure(restartState *State, err error) error {
-	if restartState == nil || err == nil {
-		return err
+func automaticRestartAttemptFailure(err error) error {
+	if err == nil {
+		return nil
 	}
 	return &automaticRestartAttemptError{cause: err}
+}
+
+func restartPreflightFailure(restartState *State, err error) error {
+	if restartState == nil || !restartState.WasActive || err == nil {
+		return err
+	}
+	return automaticRestartAttemptFailure(err)
+}
+
+// networkPreflightFailure also permits an initial startup to enter the
+// supervisor when the failure is a transient network condition. A session
+// that was previously active remains retryable for every preflight failure at
+// these call sites because its configuration and proxy capabilities have
+// already been proven to work.
+func networkPreflightFailure(restartState *State, err error) error {
+	if err == nil {
+		return nil
+	}
+	if (restartState != nil && restartState.WasActive) || transientNetworkReadinessError(err) {
+		return automaticRestartAttemptFailure(err)
+	}
+	return err
+}
+
+func transientNetworkReadinessError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"connection refused",
+		"connection reset",
+		"general socks server failure",
+		"host not found",
+		"host unreachable",
+		"i/o timeout",
+		"network is unreachable",
+		"network unreachable",
+		"no route to host",
+		"operation canceled",
+		"operation timed out",
+		"temporary failure",
+		"ttl expired",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 var automaticRestartRetryDelays = []time.Duration{
@@ -69,7 +126,19 @@ func (a *App) Up(cfg Config) error {
 	if err := a.recoverStale(); err != nil {
 		return err
 	}
-	return a.superviseAutomaticRestart(sigCh, automaticRestartSupervisorDeps{
+	_, configuredApplications, err := validateStartupInputs(cfg)
+	if err != nil {
+		return err
+	}
+	startingState, err := newOwnerStartingState(cfg, configuredApplications)
+	if err != nil {
+		return err
+	}
+	if err := saveState(startingState); err != nil {
+		return fmt.Errorf("save startup owner state: %w", err)
+	}
+	return a.superviseAutomaticRestart(sigCh, startingState, automaticRestartSupervisorDeps{
+		allowInitialRetry: cfg.Interface == "" && cfg.Gateway4 == "",
 		runSession: func(restartState *State) error {
 			return a.up(cfg, true, sigCh, restartState)
 		},
@@ -89,12 +158,17 @@ func (a *App) Up(cfg Config) error {
 }
 
 type automaticRestartSupervisorDeps struct {
+	allowInitialRetry bool
 	runSession        func(*State) error
 	waitNetwork       func(time.Duration) os.Signal
 	waitInterfaceGone func() (os.Signal, error)
 }
 
-func (a *App) superviseAutomaticRestart(sigCh <-chan os.Signal, deps automaticRestartSupervisorDeps) error {
+func (a *App) superviseAutomaticRestart(
+	sigCh <-chan os.Signal,
+	startingState *State,
+	deps automaticRestartSupervisorDeps,
+) error {
 	var restartState *State
 	var restartCause error
 	restartFailures := 0
@@ -112,7 +186,7 @@ func (a *App) superviseAutomaticRestart(sigCh <-chan os.Signal, deps automaticRe
 			if delay > 0 {
 				fmt.Fprintf(a.errOut, "automatic recovery: previous restart attempt failed; retrying after at least %s: %v\n", delay, restartCause)
 			} else {
-				fmt.Fprintf(a.errOut, "automatic recovery: TUN data plane is stopped and system routes are restored; waiting for a stable physical network: %v\n", restartCause)
+				fmt.Fprintf(a.errOut, "automatic recovery: TUN data plane is stopped and system routes are restored; waiting for network, proxy, or DNS recovery: %v\n", restartCause)
 			}
 			sig := deps.waitNetwork(delay)
 			if sig != nil {
@@ -136,7 +210,10 @@ func (a *App) superviseAutomaticRestart(sigCh <-chan os.Signal, deps automaticRe
 
 		err := deps.runSession(restartState)
 		if err == nil {
-			return a.removeOwnedAutomaticRestartState(restartState)
+			if restartState != nil {
+				return a.removeOwnedAutomaticRestartState(restartState)
+			}
+			return a.removeOwnedStartingState(startingState)
 		}
 
 		var request *automaticRestartRequest
@@ -152,6 +229,19 @@ func (a *App) superviseAutomaticRestart(sigCh <-chan os.Signal, deps automaticRe
 		}
 
 		var attempt *automaticRestartAttemptError
+		if errors.As(err, &attempt) && restartState == nil && startingState != nil && deps.allowInitialRetry {
+			persisted, stateErr := loadOwnedStartingState()
+			if stateErr != nil {
+				return errors.Join(err, stateErr)
+			}
+			restartState = automaticRestartWaitingState(persisted)
+			if stateErr := saveState(restartState); stateErr != nil {
+				return errors.Join(err, fmt.Errorf("save initial automatic recovery state: %w", stateErr))
+			}
+			restartCause = attempt.cause
+			restartFailures = 1
+			continue
+		}
 		if restartState != nil && errors.As(err, &attempt) {
 			persisted, stateErr := loadOwnedAutomaticRestartState()
 			if stateErr != nil {
@@ -166,7 +256,7 @@ func (a *App) superviseAutomaticRestart(sigCh <-chan os.Signal, deps automaticRe
 		if restartState != nil {
 			return errors.Join(err, a.removeOwnedAutomaticRestartState(restartState))
 		}
-		return err
+		return errors.Join(err, a.removeOwnedStartingState(startingState))
 	}
 }
 
@@ -182,11 +272,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	}
 	restartAttempt := restartState != nil
 	sessionActivated := false
-	info, err := validateConfig(cfg)
-	if err != nil {
-		return err
-	}
-	configuredApplications, _, err := validateApplicationTargets(cfg.Applications)
+	info, configuredApplications, err := validateStartupInputs(cfg)
 	if err != nil {
 		return err
 	}
@@ -223,7 +309,10 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 
 	capabilities, err := checkSOCKS5(info)
 	if err != nil {
-		return restartPreflightFailure(restartState, err)
+		return networkPreflightFailure(restartState, err)
+	}
+	if startupInterrupted() {
+		return nil
 	}
 	trustedDNS, err := parseTrustedDNS(cfg.TrustedDNS)
 	if err != nil {
@@ -231,11 +320,14 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	}
 	if len(configuredApplications) > 0 && trustedDNS.IsValid() {
 		if err := checkTrustedDNS(cfg.Proxy, trustedDNS); err != nil {
-			return restartPreflightFailure(restartState, fmt.Errorf(
+			return networkPreflightFailure(restartState, fmt.Errorf(
 				"trusted DNS check through SOCKS5 failed for %s: %w", trustedDNS, err,
 			))
 		}
 		fmt.Fprintf(a.out, "trusted DNS check passed through SOCKS5: %s\n", trustedDNS)
+	}
+	if startupInterrupted() {
+		return nil
 	}
 	if capabilities.UDP {
 		fmt.Fprintf(a.out, "proxy check passed: %s (TCP + UDP data)\n", redactProxy(cfg.Proxy))
@@ -248,27 +340,30 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		))
 	}
 	if cfg.TCPOnly {
-		if len(cfg.Applications) == 0 {
-			return fmt.Errorf("TCP-only compatibility mode requires at least one --app")
-		}
 		capabilities.UDP = false
 		capabilities.UDPWarning = "TCP-only compatibility mode is enabled"
 		fmt.Fprintln(a.out, "TCP-only compatibility mode enabled: selected-app non-DNS UDP, including QUIC, is blocked so applications fall back to proxied TCP")
 	}
 	engineProxy, err := proxyURLWithResolvedHost(info)
 	if err != nil {
-		return restartPreflightFailure(restartState, err)
+		return networkPreflightFailure(restartState, err)
+	}
+	if startupInterrupted() {
+		return nil
 	}
 
 	gateway4, iface, err := defaultRoute4(a.runner)
 	if err != nil {
-		return restartPreflightFailure(restartState, fmt.Errorf("detect default IPv4 route: %w", err))
+		return automaticRestartAttemptFailure(fmt.Errorf("detect default IPv4 route: %w", err))
 	}
 	if cfg.Gateway4 != "" {
 		gateway4 = cfg.Gateway4
 	}
 	if cfg.Interface != "" {
 		iface = cfg.Interface
+	}
+	if startupInterrupted() {
+		return nil
 	}
 	if strings.HasPrefix(iface, "utun") && (cfg.Interface == "" || cfg.Gateway4 == "") {
 		return restartPreflightFailure(restartState, fmt.Errorf(
@@ -277,6 +372,9 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	}
 
 	gateway6, iface6, _ := defaultRoute6(a.runner)
+	if startupInterrupted() {
+		return nil
+	}
 	if cfg.IPv6 && len(cfg.Applications) > 0 && iface6 == "" {
 		cfg.IPv6 = false
 		fmt.Fprintln(a.out, "warning: no usable IPv6 default route was found; IPv6 capture is disabled for this session")
@@ -289,10 +387,13 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	if automaticNetwork || cfg.ICMPDirect {
 		initialPhysicalRoute, err = samplePhysicalAddresses(a.runner, initialPhysicalRoute, cfg.IPv6 && iface6 != "")
 		if err != nil {
-			return restartPreflightFailure(restartState, fmt.Errorf(
+			return automaticRestartAttemptFailure(fmt.Errorf(
 				"record initial physical interface addresses: %w", err,
 			))
 		}
+	}
+	if startupInterrupted() {
+		return nil
 	}
 
 	baseBypassValues := append([]string(nil), cfg.Bypass...)
@@ -305,13 +406,19 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	if discoverPeers {
 		autoPeers = discoverProxyPeers(a.runner, info.Port)
 	}
+	if startupInterrupted() {
+		return nil
+	}
 	baseBypasses, err := resolveBypasses(baseBypassValues)
 	if err != nil {
-		return restartPreflightFailure(restartState, err)
+		return networkPreflightFailure(restartState, err)
 	}
 	bypasses, err := mergeBypassPrefixes(baseBypasses, autoPeers)
 	if err != nil {
 		return err
+	}
+	if startupInterrupted() {
+		return nil
 	}
 	if info.Loopback && len(cfg.Applications) == 0 && len(bypasses) == 0 {
 		return restartPreflightFailure(restartState, fmt.Errorf(
@@ -319,7 +426,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 		))
 	}
 	if info.Loopback && len(cfg.Applications) > 0 && len(bypasses) == 0 {
-		return restartPreflightFailure(restartState, fmt.Errorf(
+		return automaticRestartAttemptFailure(fmt.Errorf(
 			"could not discover the local proxy's remote node; keep the proxy connected or provide --bypass <remote-node-host-or-IP>",
 		))
 	}
@@ -485,6 +592,7 @@ func (a *App) up(cfg Config, lockAlreadyHeld bool, sharedSigCh chan os.Signal, r
 	}
 
 	state.Phase = "active"
+	state.WasActive = true
 	if err := saveState(state); err != nil {
 		return err
 	}
@@ -687,6 +795,21 @@ func validateConfig(cfg Config) (proxyInfo, error) {
 		}
 	}
 	return info, nil
+}
+
+func validateStartupInputs(cfg Config) (proxyInfo, []string, error) {
+	info, err := validateConfig(cfg)
+	if err != nil {
+		return proxyInfo{}, nil, err
+	}
+	configuredApplications, _, err := validateApplicationTargets(cfg.Applications)
+	if err != nil {
+		return proxyInfo{}, nil, err
+	}
+	if cfg.TCPOnly && len(configuredApplications) == 0 {
+		return proxyInfo{}, nil, fmt.Errorf("TCP-only compatibility mode requires at least one --app")
+	}
+	return info, configuredApplications, nil
 }
 
 type engineController struct {
@@ -903,6 +1026,30 @@ func waitForInterfaceGone(name string, sigCh <-chan os.Signal, timeout time.Dura
 	}
 }
 
+func newOwnerStartingState(cfg Config, configuredApplications []string) (*State, error) {
+	ownerIdentity, err := readProcessIdentity(os.Getpid())
+	if err != nil {
+		return nil, fmt.Errorf("record tunscope owner identity: %w", err)
+	}
+	ownerToken := currentLockToken()
+	if ownerToken == "" {
+		return nil, fmt.Errorf("tunscope lock has no owner token")
+	}
+	return &State{
+		Version:        stateVersion,
+		Phase:          "starting",
+		OwnerPID:       os.Getpid(),
+		OwnerToken:     ownerToken,
+		OwnerStartedAt: ownerIdentity.StartedAt,
+		OwnerCommand:   ownerIdentity.Command,
+		StartedAt:      time.Now(),
+		Proxy:          redactProxy(cfg.Proxy),
+		Device:         cfg.Device,
+		Applications:   append([]string(nil), configuredApplications...),
+		ICMPDirect:     cfg.ICMPDirect,
+	}, nil
+}
+
 func automaticRestartWaitingState(active *State) *State {
 	if active == nil {
 		return nil
@@ -992,6 +1139,23 @@ func automaticRestartPhase(phase string) bool {
 	return phase == "waiting_network" || phase == "recovering"
 }
 
+func loadOwnedStartingState() (*State, error) {
+	state, err := loadState()
+	if err != nil {
+		return nil, fmt.Errorf("load startup owner state: %w", err)
+	}
+	if state.Phase != "starting" {
+		return nil, fmt.Errorf("startup owner state has unsafe phase %q", state.Phase)
+	}
+	if state.OwnerPID != os.Getpid() || state.OwnerToken == "" || state.OwnerToken != currentLockToken() {
+		return nil, fmt.Errorf("startup owner state does not belong to the current lock owner")
+	}
+	if state.EnginePID != 0 || len(state.Routes) != 0 || state.RouteReconcile != nil {
+		return nil, fmt.Errorf("startup owner state unexpectedly contains data-plane cleanup ownership")
+	}
+	return state, nil
+}
+
 func loadOwnedAutomaticRestartState() (*State, error) {
 	state, err := loadState()
 	if err != nil {
@@ -1026,6 +1190,33 @@ func (a *App) removeOwnedAutomaticRestartState(expected *State) error {
 	}
 	if err := os.Remove(statePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove automatic recovery state: %w", err)
+	}
+	return nil
+}
+
+func (a *App) removeOwnedStartingState(expected *State) error {
+	if expected == nil {
+		return nil
+	}
+	state, err := loadState()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load startup owner state before removal: %w", err)
+	}
+	if state.Phase != "starting" ||
+		state.OwnerPID != expected.OwnerPID ||
+		state.OwnerToken == "" ||
+		state.OwnerToken != expected.OwnerToken ||
+		state.OwnerToken != currentLockToken() ||
+		state.EnginePID != 0 ||
+		len(state.Routes) != 0 ||
+		state.RouteReconcile != nil {
+		return fmt.Errorf("refusing to remove state that no longer belongs to startup")
+	}
+	if err := os.Remove(statePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove startup owner state: %w", err)
 	}
 	return nil
 }
@@ -1533,9 +1724,9 @@ func (a *App) Status() error {
 		if waiting {
 			status = "waiting-network"
 			if state.Phase == "recovering" {
-				statusDetail = "physical network is stable; TUN data plane is being rebuilt"
+				statusDetail = "network readiness checks passed; TUN data plane is being rebuilt"
 			} else {
-				statusDetail = "system routes are restored; waiting for physical network recovery"
+				statusDetail = "system routes are restored; waiting for network, proxy, or DNS recovery"
 			}
 		}
 	} else {
@@ -1554,7 +1745,7 @@ func (a *App) Status() error {
 	fmt.Fprintf(a.out, "device: %s\n", state.Device)
 	fmt.Fprintf(a.out, "physical interface: %s\n", state.Interface)
 	if state.RoutesSuspended {
-		fmt.Fprintln(a.out, "TUN capture: suspended while the physical network recovers")
+		fmt.Fprintln(a.out, "TUN capture: suspended while network readiness recovers")
 	}
 	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
 	if len(state.Applications) > 0 {

@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TunScope.GUI</AssemblyName>
     <RootNamespace>TunScope.GUI</RootNamespace>
-    <Version>0.3.14</Version>
+    <Version>0.3.15</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\TunScope.ico</ApplicationIcon>
     <Platforms>x64</Platforms>

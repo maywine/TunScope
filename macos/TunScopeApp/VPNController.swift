@@ -13,7 +13,7 @@ enum TunServiceStatus: Equatable {
         case .stopped: return "已停止"
         case .starting: return "正在启动"
         case .active: return "运行中"
-        case .waitingNetwork: return "等待网络恢复"
+        case .waitingNetwork: return "等待网络/代理恢复"
         case .stopping: return "正在停止"
         case .stale: return "需要清理"
         }
@@ -39,6 +39,7 @@ final class TunController: ObservableObject {
     private let logPath = "/Library/Logs/TunScope/tunscope.log"
     private let legacyPreviousLogPath = "/Library/Logs/TunScope/tunscope.previous.log"
     private let retainedLogCount = 5
+    private var hasObservedOwnedStartup = false
 
     private var rotatedLogPaths: [String] {
         (1...retainedLogCount).map { "\(logDirectory)/tunscope.\($0).log" }
@@ -138,6 +139,7 @@ final class TunController: ObservableObject {
         guard canStart else { return }
         isBusy = true
         status = .starting
+        hasObservedOwnedStartup = false
         lastError = nil
         lastMessage = nil
         saveSettings()
@@ -146,9 +148,6 @@ final class TunController: ObservableObject {
             var configURL: URL?
             defer { isBusy = false }
             do {
-                let doctor = try await runHelper(["doctor", "--proxy", proxyURL])
-                guard doctor.status == 0 else { throw ControllerError.helperFailed(doctor.output) }
-
                 configURL = try writeTemporaryConfig()
                 guard let configURL else { throw ControllerError.configurationWriteFailed }
                 let logOwner = "\(getuid()):\(getgid())"
@@ -166,8 +165,8 @@ final class TunController: ObservableObject {
 
                 for _ in 0..<24 {
                     try await Task.sleep(for: .milliseconds(250))
-                    await refreshStatus()
-                    if status == .active || status == .waitingNetwork {
+                    let observedStatus = await refreshStatus()
+                    if observedStatus == .active || observedStatus == .waitingNetwork || observedStatus == .starting {
                         return
                     }
                 }
@@ -202,23 +201,47 @@ final class TunController: ObservableObject {
         }
     }
 
-    func refreshStatus() async {
+    @discardableResult
+    func refreshStatus() async -> TunServiceStatus? {
+        let previousStatus = status
         do {
             let result = try await runHelper(["status"])
-            let output = result.output.lowercased()
-            if output.contains("status: active") {
-                status = .active
-            } else if output.contains("status: starting") {
-                status = .starting
-            } else if output.contains("status: waiting-network") {
-                status = .waitingNetwork
-            } else if output.contains("status: stale") {
-                status = .stale
-            } else if output.contains("status: stopped") {
-                status = .stopped
-            } else if status != .starting && status != .stopping {
-                status = .stale
+            guard result.status == 0 else {
+                throw ControllerError.helperFailed(result.output)
             }
+            let output = result.output.lowercased()
+            let observedStatus: TunServiceStatus
+            if output.contains("status: active") {
+                observedStatus = .active
+            } else if output.contains("status: starting") {
+                observedStatus = .starting
+            } else if output.contains("status: waiting-network") {
+                observedStatus = .waitingNetwork
+            } else if output.contains("status: stale") {
+                observedStatus = .stale
+            } else if output.contains("status: stopped") {
+                observedStatus = .stopped
+            } else {
+                if status != .starting && status != .stopping {
+                    status = .stale
+                }
+                return nil
+            }
+            status = observedStatus
+            if observedStatus == .starting || observedStatus == .waitingNetwork {
+                hasObservedOwnedStartup = true
+            }
+            if observedStatus == .stopped && hasObservedOwnedStartup &&
+                (previousStatus == .starting || previousStatus == .waitingNetwork) {
+                let recentLog = readRecentLog()
+                if !recentLog.isEmpty {
+                    lastError = recentLog
+                }
+            }
+            if observedStatus == .stopped {
+                hasObservedOwnedStartup = false
+            }
+            return observedStatus
         } catch {
             if status != .starting && status != .stopping {
                 // A failed status check cannot prove that routes were restored.
@@ -226,6 +249,7 @@ final class TunController: ObservableObject {
                 // potentially unsafe false "stopped" state.
                 status = .stale
             }
+            return nil
         }
     }
 

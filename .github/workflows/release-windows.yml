@@ -30,7 +30,7 @@ jobs:
             '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)$'
           )
           if (-not $tagMatch.Success) {
-            throw "Release tag must look like v0.3.14 or v0.3.14-rc.1: $env:GITHUB_REF_NAME"
+            throw "Release tag must look like v0.3.15 or v0.3.15-rc.1: $env:GITHUB_REF_NAME"
           }
           $version = $tagMatch.Groups['version'].Value
           "TUNSCOPE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

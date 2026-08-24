@@ -133,6 +133,7 @@ type State struct {
 	Routes          []Route                `json:"routes"`
 	RoutesSuspended bool                   `json:"routesSuspended,omitempty"`
 	RouteReconcile  *RouteReconcileJournal `json:"routeReconcile,omitempty"`
+	WasActive       bool                   `json:"wasActive,omitempty"`
 	AutoBypasses    []string               `json:"autoBypasses,omitempty"`
 	Applications    []string               `json:"applications,omitempty"`
 	ICMPDirect      bool                   `json:"icmpDirect,omitempty"`
