@@ -13,7 +13,7 @@ Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面�
 
 ## 下载与便携运行
 
-标签发布会在 [GitHub Releases](https://github.com/maywine/TunScope/releases) 生成 `tunscope-<版本>-windows-amd64.zip` 和对应的 `.sha256`。完整发布包包含自包含的 `TunScope.GUI.exe`、服务/CLI `tunscope.exe`、经官方归档 SHA-256 校验取得的 AMD64 `wintun.dll`、Wintun 许可证、示例配置和可选安装脚本；便携专用目录可以省略安装脚本。
+标签发布会在 [GitHub Releases](https://github.com/maywine/TunScope/releases) 生成 `tunscope-<版本>-windows-amd64.zip` 和对应的 `.sha256`。完整发布包包含自包含的 GUI `TunScope.exe`、服务/CLI `tunscope-cli.exe`、经官方归档 SHA-256 校验取得的 AMD64 `wintun.dll`、Wintun 许可证、示例配置和可选安装脚本；便携专用目录可以省略安装脚本。
 
 下载后先核对压缩包：
 
@@ -25,7 +25,7 @@ if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
 Expand-Archive $archive -DestinationPath .
 ```
 
-解压后保持 `TunScope.GUI.exe`、`tunscope.exe` 和 `wintun.dll` 位于同一目录，直接双击 `TunScope.GUI.exe` 并确认 UAC 即可。GUI 内的“启动”“停止”和“保存并重启”直接控制前台数据面，不需要执行 PowerShell 脚本，也不会注册 Windows Service。
+解压后保持 `TunScope.exe`、`tunscope-cli.exe` 和 `wintun.dll` 位于同一目录，直接双击 `TunScope.exe` 并确认 UAC 即可。GUI 内的“启动”“停止”和“保存并重启”直接控制前台数据面，不需要执行 PowerShell 脚本，也不会注册 Windows Service。
 
 ### 可选的 Windows Service 安装
 
@@ -39,12 +39,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMach
 安装脚本把固定文件复制到 `%ProgramFiles%\TunScope`，安装“TunScope”服务（默认手动启动），并为 GUI 创建所有用户的开始菜单快捷方式；`-AddToMachinePath` 仍是可选项。它不会启动、停止或重启数据面。更新正在运行的服务版本时会拒绝覆盖，请先执行：
 
 ```powershell
-& "$env:ProgramFiles\TunScope\tunscope.exe" service stop
+$cli = "$env:ProgramFiles\TunScope\tunscope-cli.exe"
+if (-not (Test-Path $cli)) { $cli = "$env:ProgramFiles\TunScope\tunscope.exe" }
+& $cli service stop
 ```
 
 便携 GUI 不需要此脚本。服务安装后需要新开终端才能使用更新后的 PATH。
 
-当前项目没有 Windows 代码签名证书，因此 `TunScope.GUI.exe`、`tunscope.exe` 和 PowerShell 脚本本身未签名，首次下载时可能出现 SmartScreen 提示；包内的 `wintun.dll` 来自 Wintun 官方签名发行包。校验 `.sha256` 只能检测下载损坏或与 GitHub 发布资产不一致，不能替代代码签名。
+当前项目没有 Windows 代码签名证书，因此 `TunScope.exe`、`tunscope-cli.exe` 和 PowerShell 脚本本身未签名，首次下载时可能出现 SmartScreen 提示；包内的 `wintun.dll` 来自 Wintun 官方签名发行包。校验 `.sha256` 只能检测下载损坏或与 GitHub 发布资产不一致，不能替代代码签名。
 
 ## 便携 GUI
 
@@ -54,8 +56,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMach
 - 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
 - 无需安装服务即可启动、停止、保存并重启 TUN。
 - 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
+- 在窗口标题和左下角显示当前发布版本号。
 
-GUI 将配置通过标准输入交给 `tunscope.exe`，代理用户名和密码不会出现在子进程命令行。完整配置位于 `%ProgramData%\TunScope\service\config.json`；该目录使用受保护 ACL，只允许 LocalSystem 和 Administrators。运行时状态位于 `%ProgramData%\TunScope`，不会保存代理密码。
+GUI 将配置通过标准输入交给 `tunscope-cli.exe`，代理用户名和密码不会出现在子进程命令行。完整配置位于 `%ProgramData%\TunScope\service\config.json`；该目录使用受保护 ACL，只允许 LocalSystem 和 Administrators。运行时状态位于 `%ProgramData%\TunScope`，不会保存代理密码。
 
 正常关闭 GUI 时，它会先向前台数据面发送安全停止请求，等待精确路由清理完成后再退出。若 GUI 异常崩溃而数据面仍在运行，重新打开 GUI 后可以查看状态并点击“停止”；下一次启动也会恢复可安全清理的残留状态。
 
@@ -66,7 +69,7 @@ GUI 将配置通过标准输入交给 `tunscope.exe`，代理用户名和密码�
 对应的管理员 CLI：
 
 ```powershell
-$tunscope = "$env:ProgramFiles\TunScope\tunscope.exe"
+$tunscope = "$env:ProgramFiles\TunScope\tunscope-cli.exe"
 Get-Content .\tunscope.example.json -Raw | & $tunscope service configure --stdin
 & $tunscope service install --startup manual
 & $tunscope service start
@@ -80,13 +83,13 @@ SCM 只有在 TUN 地址和路由全部提交后才会显示 Running。停止或
 
 ## Wintun
 
-Wintun 官方支持随应用分发从 [wintun.net](https://www.wintun.net/) 下载的已签名 DLL。手工构建时，下载 ZIP 后把其中 `bin\amd64\wintun.dll` 放到 `tunscope.exe` 同一目录；不要自行编译并分发名为 Wintun 的驱动文件。
+Wintun 官方支持随应用分发从 [wintun.net](https://www.wintun.net/) 下载的已签名 DLL。手工构建时，下载 ZIP 后把其中 `bin\amd64\wintun.dll` 放到 `tunscope-cli.exe` 同一目录；不要自行编译并分发名为 Wintun 的驱动文件。
 
 目录应类似：
 
 ```text
 TunScope\
-  tunscope.exe
+  tunscope-cli.exe
   wintun.dll
 ```
 
@@ -107,25 +110,25 @@ make windows-amd64 VERSION=0.3.15
 make windows-gui VERSION=0.3.15
 ```
 
-产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.GUI.exe`。前者复制到 Windows 后应重命名为 `tunscope.exe`。也可以直接构建 CLI：
+产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.exe`。前者复制到 Windows 后应重命名为 `tunscope-cli.exe`。也可以直接构建 CLI：
 
 ```bash
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -trimpath -o bin/tunscope-windows-amd64.exe ./cmd/tunscope
 ```
 
-在 Windows 上可使用 PowerShell 的环境变量语法，或直接运行 `go build -o tunscope.exe ./cmd/tunscope`。
+在 Windows 上可使用 PowerShell 的环境变量语法，或直接运行 `go build -o tunscope-cli.exe ./cmd/tunscope`。
 
 在 Windows 上生成与 GitHub Release 相同结构的便携包：
 
 ```powershell
-go build -trimpath -ldflags "-s -w" -o .\bin\tunscope.exe .\cmd\tunscope
+go build -trimpath -ldflags "-s -w" -o .\bin\tunscope-cli.exe .\cmd\tunscope
 dotnet publish .\windows\gui\TunScope.GUI.csproj `
   -c Release -r win-x64 --self-contained true `
   -p:Version=0.3.15 -o .\bin\windows-gui
 .\windows\package.ps1 `
-  -Binary .\bin\tunscope.exe `
-  -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
+  -Binary .\bin\tunscope-cli.exe `
+  -GuiBinary .\bin\windows-gui\TunScope.exe `
   -Destination .\dist
 ```
 
@@ -138,13 +141,13 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 先在普通终端测试 SOCKS5：
 
 ```powershell
-.\tunscope.exe doctor --proxy socks5://127.0.0.1:7890
+.\tunscope-cli.exe doctor --proxy socks5://127.0.0.1:7890
 ```
 
 然后打开管理员终端，按可执行文件启动：
 
 ```powershell
-.\tunscope.exe up `
+.\tunscope-cli.exe up `
   --proxy socks5://127.0.0.1:7890 `
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe" `
   --app "$env:LOCALAPPDATA\Programs\ChatGPT\ChatGPT.exe"
@@ -155,14 +158,14 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 保持 `up` 前台运行并按 `Ctrl-C` 停止，或在另一个管理员终端执行：
 
 ```powershell
-.\tunscope.exe status
-.\tunscope.exe down
+.\tunscope-cli.exe status
+.\tunscope-cli.exe down
 ```
 
 不传 `--app` 时是全局模式。若 SOCKS5 监听在 loopback，全局模式必须绕过代理真实节点，防止代理出站再次进入 TUN：
 
 ```powershell
-.\tunscope.exe up `
+.\tunscope-cli.exe up `
   --proxy socks5://127.0.0.1:7890 `
   --bypass node.example.com
 ```
@@ -174,7 +177,7 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 示例见 [tunscope.example.json](tunscope.example.json)。在发布包目录中执行：
 
 ```powershell
-.\tunscope.exe up --config .\tunscope.example.json
+.\tunscope-cli.exe up --config .\tunscope.example.json
 ```
 
 应用路径必须是绝对路径。JSON 中的反斜杠必须写成 `\\`。
@@ -211,7 +214,7 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 - 新物理网络出现后，TunScope 会等待接口、网关、主 IPv4 和 DNS 连续 3 次保持一致，只重建物理绕行/DNS 路由并验证 `ActiveStore`；下一轮会再次确认默认路由、首选源地址和自有物理路由没有被 Windows 的网卡切换收尾流程删除。验证通过后才向 engine 发布新源地址并恢复 TUN 捕获路由。
 - 完全没有可用物理路由持续 30 秒，或新物理路由出现后持续 10 秒仍无法重建/验证时，TunScope 会安全停止并清理自身路由，避免影响其他应用。DNS-only 变化会原位更新，不暂停 TUN。该恢复策略以系统可用性优先，因此切换期间名单内应用存在短暂直连窗口。
 - 如果系统切换到了另一块物理网卡，当前版本会安全删除路由并停止；确认新网卡联网后重新执行 `up`。
-- 异常退出后，重新运行管理员权限的 `tunscope down` 或 `tunscope up` 会根据保存的 PID 创建时间和可执行文件身份恢复残留状态。
+- 异常退出后，重新运行管理员权限的 `tunscope-cli down` 或 `tunscope-cli up` 会根据保存的 PID 创建时间和可执行文件身份恢复残留状态。
 
 停止后 Wintun 虚拟网卡设备可能仍显示在系统中，TunScope 会移除自己设置的 IP 地址和路由；下次启动会复用该适配器。
 

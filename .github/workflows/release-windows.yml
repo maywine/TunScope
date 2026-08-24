@@ -61,9 +61,15 @@ jobs:
             -p:Version=$env:TUNSCOPE_VERSION `
             -o .\bin\windows-gui
 
+          $guiVersion = (Get-Item -LiteralPath .\bin\windows-gui\TunScope.exe).VersionInfo.ProductVersion
+          $guiVersion = ($guiVersion -split '\+', 2)[0]
+          if ($guiVersion -cne $env:TUNSCOPE_VERSION) {
+            throw "Windows GUI version injection failed: expected '$env:TUNSCOPE_VERSION', got '$guiVersion'"
+          }
+
           .\windows\package.ps1 `
             -Binary .\bin\tunscope-windows-amd64.exe `
-            -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
+            -GuiBinary .\bin\windows-gui\TunScope.exe `
             -Version $env:TUNSCOPE_VERSION `
             -Destination .\dist
       - uses: actions/upload-artifact@v4

@@ -35,7 +35,7 @@ public partial class MainWindow : Window
     private bool _closeInProgress;
     private bool _allowClose;
 
-    private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope.exe");
+    private string CliPath => Path.Combine(AppContext.BaseDirectory, "tunscope-cli.exe");
     private static string DefaultServiceDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "TunScope",
@@ -45,38 +45,39 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{ApplicationVersion()}";
+        var displayVersion = GetDisplayVersion();
+        Title = $"TunScope {displayVersion}";
+        VersionText.Text = displayVersion;
         ApplicationsListBox.ItemsSource = _applications;
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += async (_, _) => await RefreshStatusAsync();
     }
 
-    private static string ApplicationVersion()
+    private static string GetDisplayVersion()
     {
         var assembly = typeof(MainWindow).Assembly;
-        var informationalVersionAttribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-        var informationalVersion = informationalVersionAttribute?.InformationalVersion.Trim();
+        var versionAttribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        var informationalVersion = versionAttribute?.InformationalVersion;
         if (!string.IsNullOrWhiteSpace(informationalVersion))
         {
-            // The SDK can append a source revision as SemVer build metadata.
-            // Keep the product and prerelease portion concise in the UI.
             var metadataSeparator = informationalVersion.IndexOf('+');
-            return metadataSeparator >= 0
+            var version = metadataSeparator >= 0
                 ? informationalVersion[..metadataSeparator]
                 : informationalVersion;
+            return $"v{version}";
         }
 
-        var version = assembly.GetName().Version;
-        return version == null
-            ? "未知"
-            : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
+        var fallback = assembly.GetName().Version;
+        return fallback is { Build: >= 0 }
+            ? $"v{fallback.Major}.{fallback.Minor}.{fallback.Build}"
+            : "版本未知";
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         if (!File.Exists(CliPath))
         {
-            SetStatus("缺少 tunscope.exe", $"GUI 必须与 tunscope.exe 位于同一目录：{CliPath}", StatusKind.Error);
+            SetStatus("缺少 tunscope-cli.exe", $"GUI 必须与 tunscope-cli.exe 位于同一目录：{CliPath}", StatusKind.Error);
             UpdateButtons();
             return;
         }
@@ -353,7 +354,7 @@ public partial class MainWindow : Window
         if (!process.Start())
         {
             process.Dispose();
-            throw new InvalidOperationException("无法启动 tunscope.exe");
+            throw new InvalidOperationException("无法启动 tunscope-cli.exe");
         }
         _portableProcess = process;
         _portableStdoutTask = CapturePortableOutputAsync(process.StandardOutput, standardError: false);
@@ -367,7 +368,7 @@ public partial class MainWindow : Window
                 var exitCode = process.ExitCode;
                 await ReapPortableProcessAsync();
                 throw new InvalidOperationException(
-                    $"便携 TUN 启动失败，tunscope.exe 退出代码为 {exitCode}。\n\n{PortableLogExcerpt()}");
+                    $"便携 TUN 启动失败，tunscope-cli.exe 退出代码为 {exitCode}。\n\n{PortableLogExcerpt()}");
             }
 
             status = await QueryStatusAsync();
@@ -410,7 +411,7 @@ public partial class MainWindow : Window
             }
             catch (OperationCanceledException)
             {
-                throw new TimeoutException("tunscope.exe 收到停止请求后 12 秒内仍未退出；窗口将保持打开以便重试");
+                throw new TimeoutException("tunscope-cli.exe 收到停止请求后 12 秒内仍未退出；窗口将保持打开以便重试");
             }
         }
         await ReapPortableProcessAsync();
@@ -461,7 +462,7 @@ public partial class MainWindow : Window
             _portableStdoutTask = null;
             _portableStderrTask = null;
         }
-        AppendPortableLog($"tunscope.exe 已退出（代码 {exitCode}）。");
+        AppendPortableLog($"tunscope-cli.exe 已退出（代码 {exitCode}）。");
     }
 
     private void ClearPortableLog()
@@ -670,13 +671,13 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(CliPath))
         {
-            throw new FileNotFoundException("找不到 tunscope.exe", CliPath);
+            throw new FileNotFoundException("找不到 tunscope-cli.exe", CliPath);
         }
         var startInfo = CreateCliStartInfo(arguments, standardInput != null);
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
-            throw new InvalidOperationException("无法启动 tunscope.exe");
+            throw new InvalidOperationException("无法启动 tunscope-cli.exe");
         }
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -695,7 +696,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException("tunscope 命令超过 75 秒仍未完成");
+            throw new TimeoutException("tunscope-cli 命令超过 75 秒仍未完成");
         }
         var stdout = (await stdoutTask).Trim();
         var stderr = (await stderrTask).Trim();

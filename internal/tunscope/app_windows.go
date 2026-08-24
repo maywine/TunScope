@@ -907,7 +907,7 @@ func (c *windowsEngineController) WaitReady(child <-chan error, timeout time.Dur
 		}
 		return fmt.Errorf("TUN engine exited during startup: %w", err)
 	case <-timer.C:
-		return fmt.Errorf("timed out waiting for TUN engine startup; ensure wintun.dll is next to tunscope.exe")
+		return fmt.Errorf("timed out waiting for TUN engine startup; ensure wintun.dll is next to tunscope-cli.exe")
 	}
 }
 
@@ -997,7 +997,7 @@ func waitForWindowsInterface(name string, child <-chan error, timeout time.Durat
 				return iface, nil
 			}
 		case <-deadline.C:
-			return nil, fmt.Errorf("timed out waiting for Wintun interface %s; ensure wintun.dll is next to tunscope.exe", name)
+			return nil, fmt.Errorf("timed out waiting for Wintun interface %s; ensure wintun.dll is next to tunscope-cli.exe", name)
 		}
 	}
 }

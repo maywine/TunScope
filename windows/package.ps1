@@ -38,7 +38,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = $binaryVersion
 }
 elseif ($Version -cne $binaryVersion) {
-    throw "Requested package version $Version does not match tunscope.exe version $binaryVersion"
+    throw "Requested package version $Version does not match tunscope-cli.exe version $binaryVersion"
 }
 
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
@@ -52,7 +52,7 @@ if ($null -ne $resolvedGuiBinary) {
     }
     $guiVersion = ($guiVersion -split '\+', 2)[0]
     if ($guiVersion -cne $Version) {
-        throw "TunScope.GUI.exe version $guiVersion does not match tunscope.exe version $Version"
+        throw "TunScope.exe version $guiVersion does not match tunscope-cli.exe version $Version"
     }
 }
 
@@ -78,9 +78,9 @@ $checksumPath = "$archivePath.sha256"
 
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'tunscope.exe')
+    Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $stagingDirectory 'tunscope-cli.exe')
     if ($null -ne $resolvedGuiBinary) {
-        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'TunScope.GUI.exe')
+        Copy-Item -LiteralPath $resolvedGuiBinary -Destination (Join-Path $stagingDirectory 'TunScope.exe')
     }
     Copy-Item -LiteralPath $readme -Destination (Join-Path $stagingDirectory 'README.md')
     Copy-Item -LiteralPath $exampleConfig -Destination (Join-Path $stagingDirectory 'tunscope.example.json')

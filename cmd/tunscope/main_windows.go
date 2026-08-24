@@ -188,18 +188,18 @@ func runDoctor(app *tunscope.App, args []string, stderr io.Writer) error {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `tunscope - lightweight per-application TUN proxy for Windows
+	fmt.Fprint(w, `tunscope-cli - lightweight per-application TUN proxy for Windows
 
 Usage:
-  tunscope up --proxy socks5://127.0.0.1:7890 --app "C:\Path\Example.exe"
-  tunscope up --config C:\path\to\config.json
-  tunscope down
-  tunscope status
-  tunscope doctor --proxy socks5://127.0.0.1:7890
-  tunscope service install --startup manual
-  tunscope service configure --stdin
-  tunscope service start|stop|restart|status|uninstall
-  tunscope version
+  tunscope-cli up --proxy socks5://127.0.0.1:7890 --app "C:\Path\Example.exe"
+  tunscope-cli up --config C:\path\to\config.json
+  tunscope-cli down
+  tunscope-cli status
+  tunscope-cli doctor --proxy socks5://127.0.0.1:7890
+  tunscope-cli service install --startup manual
+  tunscope-cli service configure --stdin
+  tunscope-cli service start|stop|restart|status|uninstall
+  tunscope-cli version
 
 Run route and service mutations in an elevated Terminal. Foreground "up" still uses Ctrl-C; the service is controlled through SCM.
 `)

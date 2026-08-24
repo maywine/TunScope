@@ -96,15 +96,20 @@ jobs:
             --self-contained true `
             -p:Version=$env:TUNSCOPE_TEST_VERSION `
             -o .\bin\windows-gui
-          if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.GUI.exe -PathType Leaf)) {
+          if (-not (Test-Path -LiteralPath .\bin\windows-gui\TunScope.exe -PathType Leaf)) {
             throw 'Self-contained GUI executable was not produced'
+          }
+          $guiVersion = (Get-Item -LiteralPath .\bin\windows-gui\TunScope.exe).VersionInfo.ProductVersion
+          $guiVersion = ($guiVersion -split '\+', 2)[0]
+          if ($guiVersion -cne $env:TUNSCOPE_TEST_VERSION) {
+            throw "Unexpected Windows GUI product version: $guiVersion"
           }
       - name: Build and inspect Windows package
         shell: pwsh
         run: |
           .\windows\package.ps1 `
             -Binary .\bin\tunscope-windows-amd64.exe `
-            -GuiBinary .\bin\windows-gui\TunScope.GUI.exe `
+            -GuiBinary .\bin\windows-gui\TunScope.exe `
             -Destination .\dist
 
           $archives = @(Get-ChildItem -LiteralPath .\dist -Filter '*.zip' -File)
@@ -126,8 +131,8 @@ jobs:
             throw "Expected one package root, found $($packageRoot.Count)"
           }
           $required = @(
-            'tunscope.exe',
-            'TunScope.GUI.exe',
+            'tunscope-cli.exe',
+            'TunScope.exe',
             'wintun.dll',
             'README.md',
             'LICENSE.txt',

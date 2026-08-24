@@ -184,14 +184,14 @@ func runWindowsServiceCommand(args []string, stdout, stderr io.Writer) error {
 
 func printWindowsServiceUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  tunscope service install [--startup manual|automatic]
-  tunscope service configure --stdin
-  tunscope service configure --config C:\path\to\config.json
-  tunscope service start
-  tunscope service stop
-  tunscope service restart
-  tunscope service status [--json]
-  tunscope service uninstall
+  tunscope-cli service install [--startup manual|automatic]
+  tunscope-cli service configure --stdin
+  tunscope-cli service configure --config C:\path\to\config.json
+  tunscope-cli service start
+  tunscope-cli service stop
+  tunscope-cli service restart
+  tunscope-cli service status [--json]
+  tunscope-cli service uninstall
 
 The service runs as LocalSystem. Manual startup is recommended when SOCKS5 belongs to a logged-in desktop user.
 `)
@@ -284,7 +284,7 @@ func installWindowsService(startup string, stdout, stderr io.Writer) error {
 	if err := eventlog.InstallAsEventCreate(windowsServiceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil && !strings.Contains(err.Error(), "registry key already exists") {
 		fmt.Fprintf(stderr, "warning: install Windows Event Log source: %v\n", err)
 	}
-	fmt.Fprintln(stdout, "the service was not started; save a config, then run 'tunscope service start'")
+	fmt.Fprintln(stdout, "the service was not started; save a config, then run 'tunscope-cli service start'")
 	return nil
 }
 
@@ -311,7 +311,7 @@ func secureWindowsServiceExecutable() (string, error) {
 	}
 	relative, err := filepath.Rel(programFiles, executable)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("refusing to install a LocalSystem service from a user-writable path; run install.ps1 so tunscope.exe is under %s", programFiles)
+		return "", fmt.Errorf("refusing to install a LocalSystem service from a user-writable path; run install.ps1 so tunscope-cli.exe is under %s", programFiles)
 	}
 	if info, err := os.Stat(filepath.Join(filepath.Dir(executable), "wintun.dll")); err != nil || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("wintun.dll must be next to the service executable")

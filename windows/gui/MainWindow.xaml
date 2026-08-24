@@ -56,12 +56,7 @@
                     <TextBlock x:Name="StatusText" Text="正在读取 TUN 状态…" FontSize="18" FontWeight="SemiBold" />
                     <TextBlock x:Name="StatusDetailText" Text="" Margin="0,4,0,0" Foreground="#667085" TextWrapping="Wrap" />
                 </StackPanel>
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock x:Name="VersionText" Text="v—" Margin="0,0,12,0"
-                               VerticalAlignment="Center" Foreground="#667085"
-                               ToolTip="GUI 程序集版本" />
-                    <Button x:Name="RefreshButton" Content="刷新" Click="RefreshButton_Click" Margin="0" />
-                </StackPanel>
+                <Button Grid.Column="3" x:Name="RefreshButton" Content="刷新" Click="RefreshButton_Click" Margin="8,0,0,0" />
             </Grid>
         </Border>
 
@@ -182,8 +177,11 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Button Grid.Column="0" x:Name="UninstallButton" Content="移除旧服务"
-                    Click="UninstallButton_Click" Visibility="Collapsed" />
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock x:Name="VersionText" VerticalAlignment="Center" Foreground="#667085" Margin="0,0,12,0" />
+                <Button x:Name="UninstallButton" Content="移除旧服务"
+                        Click="UninstallButton_Click" Visibility="Collapsed" Margin="0" />
+            </StackPanel>
             <TextBlock Grid.Column="1" x:Name="OperationText" VerticalAlignment="Center" Foreground="#667085" TextAlignment="Center" />
             <StackPanel Grid.Column="2" Orientation="Horizontal">
                 <Button x:Name="SaveButton" Content="保存配置" Click="SaveButton_Click" />
