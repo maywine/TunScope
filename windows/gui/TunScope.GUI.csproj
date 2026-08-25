@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TunScope</AssemblyName>
     <RootNamespace>TunScope.GUI</RootNamespace>
-    <Version>0.3.15</Version>
+    <Version>0.3.16</Version>
     <AssemblyTitle>TunScope</AssemblyTitle>
     <Product>TunScope</Product>
     <Description>TunScope for Windows</Description>

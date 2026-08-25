@@ -176,10 +176,19 @@ func resolveBypasses(values []string) ([]netip.Prefix, error) {
 			if prefix.Bits() == 0 {
 				return nil, fmt.Errorf("bypass %q is too broad", raw)
 			}
+			// Loopback already has a more-specific local route and must never be
+			// redirected to a physical gateway as an explicit bypass route.
+			if prefix.Addr().IsLoopback() {
+				continue
+			}
 			seen[prefix] = struct{}{}
 			continue
 		}
 		if addr, err := netip.ParseAddr(value); err == nil {
+			addr = addr.Unmap()
+			if addr.IsLoopback() {
+				continue
+			}
 			seen[netip.PrefixFrom(addr, addr.BitLen())] = struct{}{}
 			continue
 		}
@@ -189,7 +198,11 @@ func resolveBypasses(values []string) ([]netip.Prefix, error) {
 		}
 		for _, ip := range ips {
 			if addr, ok := netip.AddrFromSlice(ip); ok {
-				seen[netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen())] = struct{}{}
+				addr = addr.Unmap()
+				if addr.IsLoopback() {
+					continue
+				}
+				seen[netip.PrefixFrom(addr, addr.BitLen())] = struct{}{}
 			}
 		}
 	}

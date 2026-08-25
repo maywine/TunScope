@@ -18,7 +18,7 @@ Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面�
 下载后先核对压缩包：
 
 ```powershell
-$archive = '.\tunscope-0.3.15-windows-amd64.zip'
+$archive = '.\tunscope-0.3.16-windows-amd64.zip'
 $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
@@ -32,7 +32,7 @@ Expand-Archive $archive -DestinationPath .
 只有明确需要后台服务且目录内包含 `install.ps1` 时才运行安装脚本。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；在管理员 PowerShell 中执行：
 
 ```powershell
-Set-Location .\tunscope-0.3.15-windows-amd64
+Set-Location .\tunscope-0.3.16-windows-amd64
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
 ```
 
@@ -52,7 +52,7 @@ if (-not (Test-Path $cli)) { $cli = "$env:ProgramFiles\TunScope\tunscope.exe" }
 
 从解压目录打开 TunScope，确认 UAC 提权。GUI 可以：
 
-- 保存 SOCKS5、可选 trusted DNS、IPv6、ICMP 直连、MTU、绕行节点和日志级别；trusted DNS 留空时使用 Windows 当前系统 DNS。
+- 保存 SOCKS5、可选 trusted DNS、IPv6、ICMP 直连、MTU、“始终直连”目标和日志级别；目标可用空格、逗号、分号或换行分隔，trusted DNS 留空时使用 Windows 当前系统 DNS。
 - 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
 - 无需安装服务即可启动、停止、保存并重启 TUN。
 - 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
@@ -106,8 +106,8 @@ TunScope\
 CLI 需要 Go 1.23.1+，GUI 构建需要 .NET 8 SDK。在仓库根目录执行：
 
 ```bash
-make windows-amd64 VERSION=0.3.15
-make windows-gui VERSION=0.3.15
+make windows-amd64 VERSION=0.3.16
+make windows-gui VERSION=0.3.16
 ```
 
 产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.exe`。前者复制到 Windows 后应重命名为 `tunscope-cli.exe`。也可以直接构建 CLI：
@@ -125,16 +125,16 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 go build -trimpath -ldflags "-s -w" -o .\bin\tunscope-cli.exe .\cmd\tunscope
 dotnet publish .\windows\gui\TunScope.GUI.csproj `
   -c Release -r win-x64 --self-contained true `
-  -p:Version=0.3.15 -o .\bin\windows-gui
+  -p:Version=0.3.16 -o .\bin\windows-gui
 .\windows\package.ps1 `
   -Binary .\bin\tunscope-cli.exe `
   -GuiBinary .\bin\windows-gui\TunScope.exe `
   -Destination .\dist
 ```
 
-`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.15`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
+`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.16`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
 
-维护者推送形如 `v0.3.15` 或 `v0.3.15-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
+维护者推送形如 `v0.3.16` 或 `v0.3.16-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
 
 ## 前台 CLI 快速开始
 

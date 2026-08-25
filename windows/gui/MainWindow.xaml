@@ -163,9 +163,9 @@
                         <RowDefinition Height="10" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <TextBlock Grid.Column="0" Text="代理节点绕行（每行一个域名、IP 或 CIDR）" />
+                    <TextBlock Grid.Column="0" Text="始终直连（域名、IP 或 CIDR）" />
                     <TextBlock Grid.Column="2" Text="运行日志（本地时间，按实际级别显示，最多末尾 128 KiB）" />
-                    <TextBox Grid.Row="2" Grid.Column="0" x:Name="BypassTextBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Cascadia Mono, Consolas" />
+                    <TextBox Grid.Row="2" Grid.Column="0" x:Name="BypassTextBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Cascadia Mono, Consolas" ToolTip="使用空格、逗号、分号或换行分隔" />
                     <TextBox Grid.Row="2" Grid.Column="2" x:Name="LogTextBox" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Cascadia Mono, Consolas" Background="#10151D" Foreground="#DDE7F5" BorderThickness="0" />
                 </Grid>
             </TabItem>

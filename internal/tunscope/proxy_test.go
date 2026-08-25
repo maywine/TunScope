@@ -51,7 +51,10 @@ func TestProxyURLWithLiteralHost(t *testing.T) {
 }
 
 func TestResolveBypasses(t *testing.T) {
-	got, err := resolveBypasses([]string{"1.2.3.4", "10.0.0.0/24", "1.2.3.4/32"})
+	got, err := resolveBypasses([]string{
+		"1.2.3.4", "10.0.0.0/24", "1.2.3.4/32",
+		"127.0.0.1/32", "::1/128", "localhost",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

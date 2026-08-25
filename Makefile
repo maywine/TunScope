@@ -1,7 +1,7 @@
 BINARY := bin/tunscope
 WINDOWS_BINARY := bin/tunscope-windows-amd64.exe
 WINDOWS_GUI_DIR := bin/windows-gui
-VERSION ?= 0.3.15
+VERSION ?= 0.3.16
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build windows-amd64 windows-gui test clean install uninstall

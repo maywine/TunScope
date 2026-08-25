@@ -69,6 +69,16 @@ struct ContentView: View {
                 }
                 .disabled(!controller.canEditConfiguration)
             }
+            HStack {
+                Text("始终直连")
+                    .frame(width: 72, alignment: .leading)
+                TextField("IP、CIDR 或域名；使用空格或逗号分隔", text: $controller.bypassText)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!controller.canEditConfiguration)
+            }
+            Text("这些目标会在下次启动 TUN 时作为自定义 bypass 生效。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("TCP 稳定模式（阻断所选应用的全部非 DNS UDP）", isOn: $controller.tcpOnly)
                 .disabled(!controller.canEditConfiguration)
             HStack {

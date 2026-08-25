@@ -29,6 +29,7 @@ final class TunController: ObservableObject {
     @Published var icmpDirect = true {
         didSet { UserDefaults.standard.set(icmpDirect, forKey: "icmpDirect") }
     }
+    @Published var bypassText = ""
     @Published private(set) var applications: [TargetApplication] = []
     @Published private(set) var status: TunServiceStatus = .stopped
     @Published var lastError: String?
@@ -273,6 +274,7 @@ final class TunController: ObservableObject {
         let config = HelperConfig(
             proxy: proxyURL,
             device: "utun123",
+            bypass: bypassValues,
             applications: applications.map { $0.applicationPath },
             mtu: 1500,
             logLevel: "info",
@@ -406,6 +408,7 @@ final class TunController: ObservableObject {
 
     private func saveSettings() {
         UserDefaults.standard.set(proxyURL, forKey: "proxyURL")
+        UserDefaults.standard.set(bypassText, forKey: "bypassText")
         guard let data = try? JSONEncoder().encode(applications) else { return }
         UserDefaults.standard.set(data, forKey: "targetApplications")
     }
@@ -413,6 +416,9 @@ final class TunController: ObservableObject {
     private func loadSettings() {
         if let savedProxy = UserDefaults.standard.string(forKey: "proxyURL") {
             proxyURL = savedProxy
+        }
+        if let savedBypass = UserDefaults.standard.string(forKey: "bypassText") {
+            bypassText = savedBypass
         }
         if UserDefaults.standard.object(forKey: "tcpOnly") != nil {
             tcpOnly = UserDefaults.standard.bool(forKey: "tcpOnly")
@@ -424,11 +430,22 @@ final class TunController: ObservableObject {
               let saved = try? JSONDecoder().decode([TargetApplication].self, from: data) else { return }
         applications = saved.filter { FileManager.default.fileExists(atPath: $0.applicationPath) }
     }
+
+    private var bypassValues: [String] {
+        let separators = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: ",;"))
+        var seen = Set<String>()
+        return bypassText
+            .components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
 }
 
 private struct HelperConfig: Encodable {
     let proxy: String
     let device: String
+    let bypass: [String]
     let applications: [String]
     let mtu: Int
     let logLevel: String
