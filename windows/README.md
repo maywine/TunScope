@@ -1,6 +1,6 @@
 # TunScope for Windows
 
-Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面和可选的标准 Windows Service，支持 Windows 10/11 x64、全局 TUN、按可执行文件分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 直接管理前台数据面，正常关闭窗口时会先停止 TUN 并恢复路由。
+Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面和可选的标准 Windows Service，支持 Windows 10/11 x64、全局 TUN、按可执行文件或 PackageFamilyName 分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 直接管理前台数据面，正常关闭窗口时会先停止 TUN 并恢复路由。
 
 ## 运行要求
 
@@ -18,7 +18,7 @@ Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面�
 下载后先核对压缩包：
 
 ```powershell
-$archive = '.\tunscope-0.3.16-windows-amd64.zip'
+$archive = '.\tunscope-0.3.17-windows-amd64.zip'
 $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
@@ -32,7 +32,7 @@ Expand-Archive $archive -DestinationPath .
 只有明确需要后台服务且目录内包含 `install.ps1` 时才运行安装脚本。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；在管理员 PowerShell 中执行：
 
 ```powershell
-Set-Location .\tunscope-0.3.16-windows-amd64
+Set-Location .\tunscope-0.3.17-windows-amd64
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
 ```
 
@@ -53,7 +53,7 @@ if (-not (Test-Path $cli)) { $cli = "$env:ProgramFiles\TunScope\tunscope.exe" }
 从解压目录打开 TunScope，确认 UAC 提权。GUI 可以：
 
 - 保存 SOCKS5、可选 trusted DNS、IPv6、ICMP 直连、MTU、“始终直连”目标和日志级别；目标可用空格、逗号、分号或换行分隔，trusted DNS 留空时使用 Windows 当前系统 DNS。
-- 选择多个 `.exe`，由前台数据面匹配这些程序及其子进程；列表为空表示全局模式。
+- 选择多个 `.exe`，或填写 Microsoft Store/MSIX 应用稳定的 PackageFamilyName；前台数据面会匹配这些程序及其子进程，两个列表都为空表示全局模式。
 - 无需安装服务即可启动、停止、保存并重启 TUN。
 - 每两秒显示实际 TUN 状态、物理网卡和本次 GUI 会话的运行日志。
 - 在窗口标题和左下角显示当前发布版本号。
@@ -106,8 +106,8 @@ TunScope\
 CLI 需要 Go 1.23.1+，GUI 构建需要 .NET 8 SDK。在仓库根目录执行：
 
 ```bash
-make windows-amd64 VERSION=0.3.16
-make windows-gui VERSION=0.3.16
+make windows-amd64 VERSION=0.3.17
+make windows-gui VERSION=0.3.17
 ```
 
 产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.exe`。前者复制到 Windows 后应重命名为 `tunscope-cli.exe`。也可以直接构建 CLI：
@@ -125,16 +125,16 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 go build -trimpath -ldflags "-s -w" -o .\bin\tunscope-cli.exe .\cmd\tunscope
 dotnet publish .\windows\gui\TunScope.GUI.csproj `
   -c Release -r win-x64 --self-contained true `
-  -p:Version=0.3.16 -o .\bin\windows-gui
+  -p:Version=0.3.17 -o .\bin\windows-gui
 .\windows\package.ps1 `
   -Binary .\bin\tunscope-cli.exe `
   -GuiBinary .\bin\windows-gui\TunScope.exe `
   -Destination .\dist
 ```
 
-`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.16`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
+`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.17`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
 
-维护者推送形如 `v0.3.16` 或 `v0.3.16-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
+维护者推送形如 `v0.3.17` 或 `v0.3.17-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
 
 ## 前台 CLI 快速开始
 
@@ -150,10 +150,18 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 .\tunscope-cli.exe up `
   --proxy socks5://127.0.0.1:7890 `
   --app "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-  --app "$env:LOCALAPPDATA\Programs\ChatGPT\ChatGPT.exe"
+  --package-family "OpenAI.Codex_2p2nqsd0c76g0"
 ```
 
-`--app` 可以重复。TunScope 会匹配指定可执行文件以及由它启动的子进程；不在名单中的进程和暂时无法识别的进程通过物理网卡直连。提供 SOCKS5 的代理进程本身不要加入名单。
+`--app` 和 `--package-family` 都可以重复。TunScope 会匹配指定可执行文件或 Windows 包身份，以及由它们启动的子进程；不在名单中的进程和暂时无法识别的进程通过物理网卡直连。提供 SOCKS5 的代理进程本身不要加入名单。
+
+Microsoft Store/MSIX 的安装目录通常包含版本号，更新后绝对路径会变化。此类应用应使用不含版本号的 PackageFamilyName；例如：
+
+```powershell
+(Get-AppxPackage -Name OpenAI.Codex).PackageFamilyName
+```
+
+PackageFamilyName 采用不区分大小写的精确匹配，不使用路径通配符。只需在 GUI 的“应用分流”页填写查询结果，或在 JSON 配置中加入 `packageFamilies`；应用更新后无需修改规则。
 
 保持 `up` 前台运行并按 `Ctrl-C` 停止，或在另一个管理员终端执行：
 
@@ -180,7 +188,7 @@ dotnet publish .\windows\gui\TunScope.GUI.csproj `
 .\tunscope-cli.exe up --config .\tunscope.example.json
 ```
 
-应用路径必须是绝对路径。JSON 中的反斜杠必须写成 `\\`。
+应用路径必须是绝对路径。JSON 中的反斜杠必须写成 `\\`。`packageFamilies` 中每项必须是完整 PackageFamilyName，例如 `OpenAI.Codex_2p2nqsd0c76g0`。
 
 `icmpDirect` 默认是 `true`。启用后，TunScope 使用管理员 raw socket 把未分片的 IPv4/IPv6 Echo Request 绑定到物理网卡发送，并将 Echo Reply 或相关 ICMP 错误恢复原 ID、地址和校验和后注入 Wintun。该流量不经过 SOCKS5，且对所有应用生效；需要严格隐藏物理出口时设为 `false`。
 
@@ -221,7 +229,7 @@ loopback DNS 不会被 TunScope 错误地改成物理网关路由。停止 `dnsc
 ## 当前限制
 
 - 当前发布目标是 Windows x64；ARM64、MSI/完整卸载器、系统托盘和 Microsoft Authenticode 代码签名尚未完成。
-- 按应用识别使用 Windows IP Helper TCP/UDP owner-PID 表。非常短暂、尚未出现在系统表中的流量会优先保持直连，以免影响名单外应用；确认属于引擎自身或存在冲突的流量会阻断。
+- 按应用识别使用 Windows IP Helper TCP/UDP owner-PID 表；PackageFamilyName 通过进程的 Windows 包身份读取。非常短暂、尚未出现在系统表中的流量会优先保持直连，以免影响名单外应用；确认属于引擎自身或存在冲突的流量会阻断。
 - Windows 共享 DNS 服务无法提供严格的逐应用 DNS 归属。需要稳定、防污染的解析时使用本地 `dnscrypt-proxy`，不要把共享系统 DNS 全部假定为某个名单内应用。
 - ICMP 没有可供 IP Helper 可靠映射进程的 TCP/UDP 端口元组，所以 `icmpDirect` 是全机开关，不是按应用开关；它只覆盖 Echo 和与 Echo 对应的常见错误，不是通用 ICMP/VPN 数据面。
 - 只有同一物理网卡上的地址/网关切换能够自动暂停并恢复；切换到另一块网卡后，服务模式需要重新启动服务，便携 GUI 或前台 CLI 需要重新启动数据面。

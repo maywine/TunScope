@@ -29,10 +29,12 @@ const (
 )
 
 var (
-	ipHelperDLL             = windows.NewLazySystemDLL("iphlpapi.dll")
-	getExtendedTCPTableProc = ipHelperDLL.NewProc("GetExtendedTcpTable")
-	getExtendedUDPTableProc = ipHelperDLL.NewProc("GetExtendedUdpTable")
-	windowsOwnerRetryDelays = [...]time.Duration{
+	ipHelperDLL              = windows.NewLazySystemDLL("iphlpapi.dll")
+	getExtendedTCPTableProc  = ipHelperDLL.NewProc("GetExtendedTcpTable")
+	getExtendedUDPTableProc  = ipHelperDLL.NewProc("GetExtendedUdpTable")
+	processKernel32DLL       = windows.NewLazySystemDLL("kernel32.dll")
+	getPackageFamilyNameProc = processKernel32DLL.NewProc("GetPackageFamilyName")
+	windowsOwnerRetryDelays  = [...]time.Duration{
 		3 * time.Millisecond,
 		8 * time.Millisecond,
 		20 * time.Millisecond,
@@ -41,9 +43,11 @@ var (
 )
 
 type windowsProcess struct {
-	parentPID int
-	path      string
-	known     bool
+	parentPID     int
+	name          string
+	path          string
+	packageFamily string
+	known         bool
 }
 
 type windowsFlow struct {
@@ -68,6 +72,7 @@ type windowsProcessMatcher struct {
 	mu                sync.Mutex
 	configuredTargets []string
 	targets           []string
+	packageFamilies   []string
 	snapshot          windowsProcessSnapshot
 	updatedAt         time.Time
 	generation        uint64
@@ -75,12 +80,24 @@ type windowsProcessMatcher struct {
 	selfPID           int
 	now               func() time.Time
 	sleep             func(time.Duration)
-	snapshotSystem    func([]string) (windowsProcessSnapshot, error)
+	snapshotSystem    func([]string, []string) (windowsProcessSnapshot, error)
 }
 
-func newProcessMatcher(applicationPaths []string) (processMatcher, error) {
-	if len(applicationPaths) == 0 {
+func newProcessMatcher(applicationPaths, packageFamilies []string) (processMatcher, error) {
+	if len(applicationPaths) == 0 && len(packageFamilies) == 0 {
 		return nil, fmt.Errorf("at least one application is required")
+	}
+	if err := validateApplicationTargetCount(applicationPaths, packageFamilies); err != nil {
+		return nil, err
+	}
+	validatedFamilies, err := validatePackageFamilyNames(packageFamilies)
+	if err != nil {
+		return nil, err
+	}
+	if len(validatedFamilies) > 0 {
+		if err := getPackageFamilyNameProc.Find(); err != nil {
+			return nil, fmt.Errorf("load Windows package identity API: %w", err)
+		}
 	}
 	configured := make([]string, 0, len(applicationPaths))
 	targets := make([]string, 0, len(applicationPaths))
@@ -96,6 +113,7 @@ func newProcessMatcher(applicationPaths []string) (processMatcher, error) {
 	matcher := &windowsProcessMatcher{
 		configuredTargets: configured,
 		targets:           targets,
+		packageFamilies:   validatedFamilies,
 		selfPID:           os.Getpid(),
 		now:               time.Now,
 		sleep:             time.Sleep,
@@ -154,11 +172,12 @@ func (m *windowsProcessMatcher) refresh(force bool, observedGeneration uint64) e
 	m.refreshing = inFlight
 	configured := append([]string(nil), m.configuredTargets...)
 	targets := append([]string(nil), m.targets...)
+	packageFamilies := append([]string(nil), m.packageFamilies...)
 	snapshotSystem := m.snapshotSystem
 	m.mu.Unlock()
 
 	targets = refreshWindowsTargets(configured, targets)
-	snapshot, err := snapshotSystem(targets)
+	snapshot, err := snapshotSystem(targets, packageFamilies)
 	completedAt := m.now()
 
 	m.mu.Lock()
@@ -204,24 +223,21 @@ func refreshWindowsTargets(configured, known []string) []string {
 	return result
 }
 
-func snapshotWindowsSystem(targets []string) (windowsProcessSnapshot, error) {
-	processes, err := snapshotWindowsProcesses(targets)
+func snapshotWindowsSystem(targets, packageFamilies []string) (windowsProcessSnapshot, error) {
+	processes, err := snapshotWindowsProcesses()
 	if err != nil {
 		return windowsProcessSnapshot{}, err
 	}
-	selected := selectWindowsProcesses(processes, targets)
 	flows, err := snapshotWindowsFlows()
 	if err != nil {
 		return windowsProcessSnapshot{}, err
 	}
+	enrichWindowsProcessIdentities(processes, flows, targets, len(packageFamilies) > 0)
+	selected := selectWindowsProcesses(processes, targets, packageFamilies)
 	return windowsProcessSnapshot{processes: processes, selected: selected, flows: flows}, nil
 }
 
-func snapshotWindowsProcesses(targets []string) (map[int]windowsProcess, error) {
-	targetNames := make(map[string]struct{}, len(targets))
-	for _, target := range targets {
-		targetNames[strings.ToLower(filepath.Base(target))] = struct{}{}
-	}
+func snapshotWindowsProcesses() (map[int]windowsProcess, error) {
 	handle, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list Windows processes: %w", err)
@@ -235,10 +251,10 @@ func snapshotWindowsProcesses(targets []string) (map[int]windowsProcess, error) 
 	for err == nil {
 		pid := int(entry.ProcessID)
 		if pid > 0 {
-			process := windowsProcess{parentPID: int(entry.ParentProcessID), known: true}
-			exeName := strings.ToLower(windows.UTF16ToString(entry.ExeFile[:]))
-			if _, candidate := targetNames[exeName]; candidate {
-				process.path, _ = queryWindowsProcessPath(pid)
+			process := windowsProcess{
+				parentPID: int(entry.ParentProcessID),
+				name:      strings.ToLower(windows.UTF16ToString(entry.ExeFile[:])),
+				known:     true,
 			}
 			processes[pid] = process
 		}
@@ -250,23 +266,107 @@ func snapshotWindowsProcesses(targets []string) (map[int]windowsProcess, error) 
 	return processes, nil
 }
 
-func queryWindowsProcessPath(pid int) (string, error) {
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
-	if err != nil {
-		return "", err
+func enrichWindowsProcessIdentities(processes map[int]windowsProcess, flows []windowsFlow, targets []string, queryPackageFamily bool) {
+	targetNames := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		targetNames[strings.ToLower(filepath.Base(target))] = struct{}{}
 	}
-	defer windows.CloseHandle(handle)
-	path, err := windowsProcessPathFromHandle(handle)
-	if err != nil {
-		return "", err
+	candidates := make(map[int]struct{})
+	// Only flow owners and their ancestors can affect this snapshot's routing
+	// decisions. Limiting handle queries to that set avoids scanning every
+	// process for package identity on each short-lived owner-table refresh.
+	for _, flow := range flows {
+		pid := flow.pid
+		visiting := make(map[int]struct{})
+		for pid > 0 {
+			if _, duplicate := visiting[pid]; duplicate {
+				break
+			}
+			visiting[pid] = struct{}{}
+			if _, alreadyIncluded := candidates[pid]; alreadyIncluded {
+				break
+			}
+			process, found := processes[pid]
+			if !found {
+				break
+			}
+			candidates[pid] = struct{}{}
+			if process.parentPID == pid {
+				break
+			}
+			pid = process.parentPID
+		}
 	}
-	return normalizeWindowsPath(path), nil
+	for pid := range candidates {
+		process := processes[pid]
+		_, queryPath := targetNames[process.name]
+		if !queryPath && !queryPackageFamily {
+			continue
+		}
+		process.path, process.packageFamily, _ = queryWindowsProcessIdentity(pid, queryPath, queryPackageFamily)
+		processes[pid] = process
+	}
 }
 
-func selectWindowsProcesses(processes map[int]windowsProcess, targets []string) map[int]bool {
+func queryWindowsProcessIdentity(pid int, queryPath, queryPackageFamily bool) (string, string, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return "", "", err
+	}
+	defer windows.CloseHandle(handle)
+	var path, packageFamily string
+	var pathErr, packageErr error
+	if queryPath {
+		path, pathErr = windowsProcessPathFromHandle(handle)
+		path = normalizeWindowsPath(path)
+	}
+	if queryPackageFamily {
+		packageFamily, packageErr = windowsPackageFamilyNameFromHandle(handle)
+	}
+	return path, packageFamily, errors.Join(pathErr, packageErr)
+}
+
+func queryWindowsProcessPath(pid int) (string, error) {
+	path, _, err := queryWindowsProcessIdentity(pid, true, false)
+	return path, err
+}
+
+func windowsPackageFamilyNameFromHandle(handle windows.Handle) (string, error) {
+	var length uint32
+	result, _, _ := getPackageFamilyNameProc.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&length)),
+		0,
+	)
+	if result == uintptr(windows.APPMODEL_ERROR_NO_PACKAGE) {
+		return "", nil
+	}
+	if result != uintptr(windows.ERROR_INSUFFICIENT_BUFFER) {
+		return "", syscall.Errno(result)
+	}
+	if length == 0 || length > 256 {
+		return "", fmt.Errorf("Windows package family name has invalid length %d", length)
+	}
+	buffer := make([]uint16, length)
+	result, _, _ = getPackageFamilyNameProc.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&length)),
+		uintptr(unsafe.Pointer(&buffer[0])),
+	)
+	if result != 0 {
+		return "", syscall.Errno(result)
+	}
+	return windows.UTF16ToString(buffer), nil
+}
+
+func selectWindowsProcesses(processes map[int]windowsProcess, targets, packageFamilies []string) map[int]bool {
 	targetSet := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
 		targetSet[normalizeWindowsPath(target)] = struct{}{}
+	}
+	packageSet := make(map[string]struct{}, len(packageFamilies))
+	for _, packageFamily := range packageFamilies {
+		packageSet[strings.ToLower(packageFamily)] = struct{}{}
 	}
 	selected := make(map[int]bool, len(processes))
 	visiting := make(map[int]bool)
@@ -283,7 +383,9 @@ func selectWindowsProcesses(processes map[int]windowsProcess, targets []string) 
 			return false
 		}
 		visiting[pid] = true
-		_, value := targetSet[normalizeWindowsPath(process.path)]
+		_, pathSelected := targetSet[normalizeWindowsPath(process.path)]
+		_, packageSelected := packageSet[strings.ToLower(process.packageFamily)]
+		value := pathSelected || packageSelected
 		if !value && process.parentPID > 0 && process.parentPID != pid {
 			value = isSelected(process.parentPID)
 		}

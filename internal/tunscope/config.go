@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const maxApplicationTargets = 128
+
 func validateApplicationPaths(values []string) ([]string, error) {
 	_, resolved, err := validateApplicationTargets(values)
 	return resolved, err
@@ -18,8 +20,8 @@ func validateApplicationPaths(values []string) ([]string, error) {
 // symlink; the configured path must survive so the matcher can discover the
 // next version after that symlink moves.
 func validateApplicationTargets(values []string) ([]string, []string, error) {
-	if len(values) > 128 {
-		return nil, nil, fmt.Errorf("at most 128 applications may be selected")
+	if len(values) > maxApplicationTargets {
+		return nil, nil, fmt.Errorf("at most %d applications may be selected", maxApplicationTargets)
 	}
 
 	seen := make(map[string]struct{}, len(values))
@@ -63,4 +65,53 @@ func validateApplicationTargets(values []string) ([]string, []string, error) {
 		resolvedPaths[i] = pairs[i].resolved
 	}
 	return configured, resolvedPaths, nil
+}
+
+func validatePackageFamilyNames(values []string) ([]string, error) {
+	if len(values) > maxApplicationTargets {
+		return nil, fmt.Errorf("at most %d package families may be selected", maxApplicationTargets)
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		separator := strings.LastIndexByte(value, '_')
+		if separator < 3 || separator > 50 || len(value)-separator-1 != 13 {
+			return nil, fmt.Errorf("invalid Windows package family name %q", raw)
+		}
+		for _, character := range value[:separator] {
+			if !isASCIILetterOrDigit(character) && character != '.' && character != '-' {
+				return nil, fmt.Errorf("invalid Windows package family name %q", raw)
+			}
+		}
+		for _, character := range value[separator+1:] {
+			if !isASCIILetterOrDigit(character) {
+				return nil, fmt.Errorf("invalid Windows package family name %q", raw)
+			}
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i]) < strings.ToLower(result[j])
+	})
+	return result, nil
+}
+
+func validateApplicationTargetCount(applicationPaths, packageFamilies []string) error {
+	if len(applicationPaths)+len(packageFamilies) > maxApplicationTargets {
+		return fmt.Errorf("at most %d application paths and package families may be selected", maxApplicationTargets)
+	}
+	return nil
+}
+
+func isASCIILetterOrDigit(character rune) bool {
+	return character >= 'a' && character <= 'z' ||
+		character >= 'A' && character <= 'Z' ||
+		character >= '0' && character <= '9'
 }

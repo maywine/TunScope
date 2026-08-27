@@ -98,6 +98,7 @@ func runUp(app *tunscope.App, args []string, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	bypass := stringList(append([]string(nil), cfg.Bypass...))
 	applications := stringList(append([]string(nil), cfg.Applications...))
+	packageFamilies := stringList(append([]string(nil), cfg.PackageFamilies...))
 	deleteConfig := false
 	proxyDefault := cfg.Proxy
 	fs.StringVar(&configPath, "config", configPath, "read settings from a JSON file")
@@ -106,6 +107,7 @@ func runUp(app *tunscope.App, args []string, stderr io.Writer) error {
 	fs.StringVar(&cfg.Proxy, "p", proxyDefault, "short form of --proxy")
 	fs.Var(&bypass, "bypass", "proxy server IP, CIDR, or hostname to keep outside TUN (repeatable)")
 	fs.Var(&applications, "app", "application executable to proxy (repeatable)")
+	fs.Var(&packageFamilies, "package-family", "Windows package family name to proxy (repeatable)")
 	fs.StringVar(&cfg.Interface, "interface", cfg.Interface, "physical adapter name (auto-detected by default)")
 	fs.StringVar(&cfg.Gateway4, "gateway", cfg.Gateway4, "physical IPv4 gateway (auto-detected by default)")
 	fs.StringVar(&cfg.Device, "device", cfg.Device, "Wintun adapter name")
@@ -124,6 +126,7 @@ func runUp(app *tunscope.App, args []string, stderr io.Writer) error {
 	}
 	cfg.Bypass = bypass
 	cfg.Applications = applications
+	cfg.PackageFamilies = packageFamilies
 	if deleteConfig && configPath != "" {
 		if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("delete temporary config: %w", err)
@@ -192,6 +195,7 @@ func printUsage(w io.Writer) {
 
 Usage:
   tunscope-cli up --proxy socks5://127.0.0.1:7890 --app "C:\Path\Example.exe"
+  tunscope-cli up --proxy socks5://127.0.0.1:7890 --package-family "OpenAI.Codex_2p2nqsd0c76g0"
   tunscope-cli up --config C:\path\to\config.json
   tunscope-cli down
   tunscope-cli status
@@ -251,10 +255,11 @@ func runWindowsEngineChild(args []string) int {
 		Close() error
 	}
 	var activeDialer networkDialer
-	if len(cfg.Applications) > 0 {
-		perApp, err := tunscope.NewPerAppDialer(
+	if cfg.HasApplicationTargets() {
+		perApp, err := tunscope.NewPerAppDialerWithPackageFamilies(
 			cfg.Proxy,
 			cfg.Applications,
+			cfg.PackageFamilies,
 			cfg.ProxyUDP,
 			cfg.TrustedDNS,
 			cfg.DirectInterface,

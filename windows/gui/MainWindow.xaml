@@ -138,15 +138,31 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="12" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="6" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="12" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="18" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="6" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="8" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="列表内的可执行文件及其子进程走 SOCKS5；列表为空时是全局模式。" Foreground="#596579" />
-                    <ListBox Grid.Row="2" x:Name="ApplicationsListBox" SelectionMode="Extended" BorderBrush="#D7DDE6" />
-                    <StackPanel Grid.Row="4" Orientation="Horizontal">
+                    <TextBlock Text="命中的应用及其子进程走 SOCKS5；两个列表都为空时是全局模式。" Foreground="#596579" />
+                    <TextBlock Grid.Row="2" Text="普通可执行文件（绝对路径）" />
+                    <ListBox Grid.Row="4" x:Name="ApplicationsListBox" SelectionMode="Extended" BorderBrush="#D7DDE6" />
+                    <StackPanel Grid.Row="6" Orientation="Horizontal">
                         <Button Content="添加 .exe" Click="AddApplicationButton_Click" />
                         <Button Content="移除选中" Click="RemoveApplicationButton_Click" />
+                    </StackPanel>
+                    <TextBlock Grid.Row="8" Text="Microsoft Store / MSIX 应用的 PackageFamilyName（应用更新后保持稳定）" />
+                    <ListBox Grid.Row="10" x:Name="PackageFamiliesListBox" SelectionMode="Extended" BorderBrush="#D7DDE6" />
+                    <StackPanel Grid.Row="12" Orientation="Horizontal">
+                        <TextBox x:Name="PackageFamilyTextBox" Width="360" Height="32" VerticalContentAlignment="Center" FontFamily="Cascadia Mono, Consolas" />
+                        <Button Content="添加包族" Click="AddPackageFamilyButton_Click" />
+                        <Button Content="移除选中" Click="RemovePackageFamilyButton_Click" />
                     </StackPanel>
                 </Grid>
             </TabItem>

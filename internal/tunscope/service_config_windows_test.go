@@ -20,12 +20,27 @@ func TestNormalizeWindowsServiceConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Proxy = "socks5://127.0.0.1:7890"
 	cfg.Applications = []string{executable, executable}
+	cfg.PackageFamilies = []string{" OpenAI.Codex_2p2nqsd0c76g0 ", "openai.codex_2P2NQSD0C76G0"}
 	cfg.Bypass = []string{" node.example.com ", "NODE.EXAMPLE.COM"}
 	normalized, err := NormalizeWindowsServiceConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(normalized.Applications) != 1 || len(normalized.Bypass) != 1 || normalized.Bypass[0] != "node.example.com" {
+	if len(normalized.Applications) != 1 || len(normalized.PackageFamilies) != 1 || normalized.PackageFamilies[0] != "OpenAI.Codex_2p2nqsd0c76g0" || len(normalized.Bypass) != 1 || normalized.Bypass[0] != "node.example.com" {
+		t.Fatalf("normalized config = %#v", normalized)
+	}
+}
+
+func TestNormalizeWindowsServiceConfigAcceptsPackageFamilyOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Proxy = "socks5://127.0.0.1:7890"
+	cfg.PackageFamilies = []string{"OpenAI.Codex_2p2nqsd0c76g0"}
+	cfg.TCPOnly = true
+	normalized, err := NormalizeWindowsServiceConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !normalized.HasApplicationTargets() || normalized.ApplicationTargetCount() != 1 {
 		t.Fatalf("normalized config = %#v", normalized)
 	}
 }

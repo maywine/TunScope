@@ -7,6 +7,9 @@
   "applications": [
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
   ],
+  "packageFamilies": [
+    "OpenAI.Codex_2p2nqsd0c76g0"
+  ],
   "mtu": 1500,
   "logLevel": "info",
   "autoBypass": false,

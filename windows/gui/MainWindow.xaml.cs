@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     };
 
     private readonly ObservableCollection<string> _applications = [];
+    private readonly ObservableCollection<string> _packageFamilies = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly object _portableLogLock = new();
     private readonly StringBuilder _portableLog = new();
@@ -49,6 +50,7 @@ public partial class MainWindow : Window
         Title = $"TunScope {displayVersion}";
         VersionText.Text = displayVersion;
         ApplicationsListBox.ItemsSource = _applications;
+        PackageFamiliesListBox.ItemsSource = _packageFamilies;
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += async (_, _) => await RefreshStatusAsync();
     }
@@ -187,6 +189,15 @@ public partial class MainWindow : Window
                 _applications.Add(application);
             }
         }
+
+        _packageFamilies.Clear();
+        foreach (var packageFamily in config.PackageFamilies ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(packageFamily) && !_packageFamilies.Contains(packageFamily, StringComparer.OrdinalIgnoreCase))
+            {
+                _packageFamilies.Add(packageFamily);
+            }
+        }
     }
 
     private void SelectLogLevel(string level)
@@ -223,6 +234,7 @@ public partial class MainWindow : Window
             TrustedDns = TrustedDnsTextBox.Text.Trim(),
             Bypass = bypass,
             Applications = _applications.ToList(),
+            PackageFamilies = _packageFamilies.ToList(),
             Mtu = mtu,
             LogLevel = logLevel,
             AutoBypass = AutoBypassCheckBox.IsChecked == true,
@@ -324,6 +336,46 @@ public partial class MainWindow : Window
         {
             _applications.Remove(application);
         }
+    }
+
+    private void AddPackageFamilyButton_Click(object sender, RoutedEventArgs e)
+    {
+        var packageFamily = PackageFamilyTextBox.Text.Trim();
+        if (!IsValidPackageFamilyName(packageFamily))
+        {
+            MessageBox.Show(
+                this,
+                "请输入完整的 PackageFamilyName，例如 OpenAI.Codex_2p2nqsd0c76g0。",
+                "无效的包族名称",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+        if (!_packageFamilies.Contains(packageFamily, StringComparer.OrdinalIgnoreCase))
+        {
+            _packageFamilies.Add(packageFamily);
+        }
+        PackageFamilyTextBox.Clear();
+    }
+
+    private void RemovePackageFamilyButton_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = PackageFamiliesListBox.SelectedItems.Cast<string>().ToList();
+        foreach (var packageFamily in selected)
+        {
+            _packageFamilies.Remove(packageFamily);
+        }
+    }
+
+    private static bool IsValidPackageFamilyName(string value)
+    {
+        var separator = value.LastIndexOf('_');
+        if (separator < 3 || separator > 50 || value.Length - separator - 1 != 13)
+        {
+            return false;
+        }
+        return value[..separator].All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-') &&
+               value[(separator + 1)..].All(char.IsAsciiLetterOrDigit);
     }
 
     private async Task StartPortableCoreAsync()
@@ -759,6 +811,9 @@ public sealed class TunScopeConfig
 
     [JsonPropertyName("applications")]
     public List<string> Applications { get; set; } = [];
+
+    [JsonPropertyName("packageFamilies")]
+    public List<string> PackageFamilies { get; set; } = [];
 
     [JsonPropertyName("mtu")]
     public int Mtu { get; set; } = 1500;

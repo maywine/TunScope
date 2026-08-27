@@ -212,7 +212,10 @@ type darwinProcessMatcher struct {
 	sleep             func(time.Duration)
 }
 
-func newProcessMatcher(applicationPaths []string) (processMatcher, error) {
+func newProcessMatcher(applicationPaths, packageFamilies []string) (processMatcher, error) {
+	if len(packageFamilies) > 0 {
+		return nil, fmt.Errorf("Windows package family matching is not supported on macOS")
+	}
 	if len(applicationPaths) == 0 {
 		return nil, fmt.Errorf("at least one application is required")
 	}

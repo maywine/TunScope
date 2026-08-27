@@ -53,7 +53,15 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	if err != nil {
 		return err
 	}
+	packageFamilies, err := validatePackageFamilyNames(cfg.PackageFamilies)
+	if err != nil {
+		return err
+	}
+	if err := validateApplicationTargetCount(configuredApplications, packageFamilies); err != nil {
+		return err
+	}
 	cfg.Applications = configuredApplications
+	cfg.PackageFamilies = packageFamilies
 
 	if err := acquireLock(); err != nil {
 		return err
@@ -75,7 +83,7 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	if err != nil {
 		return fmt.Errorf("--trusted-dns: %w", err)
 	}
-	if len(cfg.Applications) > 0 && trustedDNS.IsValid() {
+	if cfg.HasApplicationTargets() && trustedDNS.IsValid() {
 		if err := checkTrustedDNS(cfg.Proxy, trustedDNS); err != nil {
 			return fmt.Errorf("trusted DNS check through SOCKS5 failed for %s: %w", trustedDNS, err)
 		}
@@ -83,15 +91,15 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	}
 	if capabilities.UDP {
 		fmt.Fprintf(a.out, "proxy check passed: %s (TCP + UDP data)\n", redactProxy(cfg.Proxy))
-	} else if len(cfg.Applications) > 0 {
+	} else if cfg.HasApplicationTargets() {
 		fmt.Fprintf(a.out, "proxy TCP check passed: %s\n", redactProxy(cfg.Proxy))
 		fmt.Fprintf(a.out, "warning: SOCKS5 UDP data is unavailable; selected applications will use DNS-over-TCP and TCP fallback: %s\n", capabilities.UDPWarning)
 	} else {
 		return fmt.Errorf("SOCKS5 UDP data is unavailable and global mode requires UDP: %s", capabilities.UDPWarning)
 	}
 	if cfg.TCPOnly {
-		if len(cfg.Applications) == 0 {
-			return fmt.Errorf("TCP-only compatibility mode requires at least one --app")
+		if !cfg.HasApplicationTargets() {
+			return fmt.Errorf("TCP-only compatibility mode requires at least one --app or --package-family")
 		}
 		capabilities.UDP = false
 		fmt.Fprintln(a.out, "TCP-only compatibility mode enabled: selected-application UDP is blocked so applications fall back to proxied TCP")
@@ -120,7 +128,7 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	if err != nil {
 		return err
 	}
-	discoverPeers := info.Loopback && (cfg.AutoBypass || len(cfg.Applications) > 0)
+	discoverPeers := info.Loopback && (cfg.AutoBypass || cfg.HasApplicationTargets())
 	var autoPeers []string
 	if discoverPeers {
 		autoPeers = discoverProxyPeers(a.runner, info.Port)
@@ -129,7 +137,7 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	if err != nil {
 		return err
 	}
-	if info.Loopback && len(cfg.Applications) == 0 && len(bypasses) == 0 {
+	if info.Loopback && !cfg.HasApplicationTargets() && len(bypasses) == 0 {
 		return fmt.Errorf("a loopback proxy in global mode requires --bypass <remote-node-host-or-IP> or --auto-bypass to prevent a proxy loop")
 	}
 
@@ -152,24 +160,25 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	}()
 
 	state := &State{
-		Version:        stateVersion,
-		Phase:          "starting",
-		OwnerPID:       os.Getpid(),
-		OwnerToken:     ownerToken,
-		OwnerStartedAt: ownerIdentity.StartedAt,
-		OwnerCommand:   ownerIdentity.Command,
-		StopEvent:      stopEvent,
-		StartedAt:      time.Now(),
-		Proxy:          redactProxy(cfg.Proxy),
-		Device:         cfg.Device,
-		Interface:      physical.InterfaceAlias,
-		Interface6:     physical.Interface6Alias,
-		PhysicalIPv4:   []string{physical.Source4},
-		Gateway4:       physical.Gateway4,
-		Gateway6:       physical.Gateway6,
-		AutoBypasses:   append([]string(nil), autoPeers...),
-		Applications:   append([]string(nil), cfg.Applications...),
-		ICMPDirect:     cfg.ICMPDirect,
+		Version:         stateVersion,
+		Phase:           "starting",
+		OwnerPID:        os.Getpid(),
+		OwnerToken:      ownerToken,
+		OwnerStartedAt:  ownerIdentity.StartedAt,
+		OwnerCommand:    ownerIdentity.Command,
+		StopEvent:       stopEvent,
+		StartedAt:       time.Now(),
+		Proxy:           redactProxy(cfg.Proxy),
+		Device:          cfg.Device,
+		Interface:       physical.InterfaceAlias,
+		Interface6:      physical.Interface6Alias,
+		PhysicalIPv4:    []string{physical.Source4},
+		Gateway4:        physical.Gateway4,
+		Gateway6:        physical.Gateway6,
+		AutoBypasses:    append([]string(nil), autoPeers...),
+		Applications:    append([]string(nil), cfg.Applications...),
+		PackageFamilies: append([]string(nil), cfg.PackageFamilies...),
+		ICMPDirect:      cfg.ICMPDirect,
 	}
 	if physical.Source6 != "" {
 		state.PhysicalIPv6 = []string{physical.Source6}
@@ -185,6 +194,7 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 		DirectInterface6: physical.Interface6Alias,
 		DirectSource4:    physical.Source4,
 		Applications:     append([]string(nil), cfg.Applications...),
+		PackageFamilies:  append([]string(nil), cfg.PackageFamilies...),
 		ProxyUDP:         capabilities.UDP,
 		TrustedDNS:       cfg.TrustedDNS,
 		IPv6:             cfg.IPv6,
@@ -264,8 +274,8 @@ func (a *App) upWindows(cfg Config, serviceStop <-chan struct{}, onActive func()
 	} else {
 		fmt.Fprintf(a.out, "TUN is active on %s via %s under Windows Service control\n", cfg.Device, physical.InterfaceAlias)
 	}
-	if len(cfg.Applications) > 0 {
-		fmt.Fprintf(a.out, "per-app mode is active for %d application(s); unselected and unknown owners stay on the physical interface\n", len(cfg.Applications))
+	if cfg.HasApplicationTargets() {
+		fmt.Fprintf(a.out, "per-app mode is active for %d application target(s); unselected and unknown owners stay on the physical interface\n", cfg.ApplicationTargetCount())
 	}
 	if cfg.ICMPDirect {
 		fmt.Fprintf(a.out, "direct ICMP echo forwarding is active on %s; ICMP from all applications bypasses SOCKS5\n", physical.InterfaceAlias)
@@ -551,7 +561,7 @@ func windowsPhysicalRoutes(cfg Config, physical windowsPhysicalNetwork, bypasses
 			routes = append(routes, Route{Family: "inet6", Kind: "net", Target: prefix.String(), Gateway: physical.Gateway6, Interface: strconv.Itoa(physical.Interface6Index), Purpose: "bypass"})
 		}
 	}
-	if len(cfg.Applications) > 0 && strings.TrimSpace(cfg.TrustedDNS) == "" {
+	if cfg.HasApplicationTargets() && strings.TrimSpace(cfg.TrustedDNS) == "" {
 		for _, server := range dns {
 			if server.Is4() {
 				routes = append(routes, Route{Family: "inet", Kind: "host", Target: server.String(), Gateway: physical.Gateway4, Interface: strconv.Itoa(physical.InterfaceIndex), Purpose: "dns-direct"})
@@ -583,7 +593,7 @@ func windowsCaptureRoutes(interfaceIndex int, ipv6 bool) []Route {
 }
 
 func windowsTUNDNSRoutes(cfg Config, interfaceIndex int, dns []netip.Addr) []Route {
-	if len(cfg.Applications) > 0 && strings.TrimSpace(cfg.TrustedDNS) == "" {
+	if cfg.HasApplicationTargets() && strings.TrimSpace(cfg.TrustedDNS) == "" {
 		return nil
 	}
 	routes := make([]Route, 0, len(dns))
@@ -1264,8 +1274,8 @@ func (a *App) Status() error {
 		fmt.Fprintln(a.out, "TUN capture: suspended while the physical network recovers")
 	}
 	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
-	if len(state.Applications) > 0 {
-		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))
+	if targets := len(state.Applications) + len(state.PackageFamilies); targets > 0 {
+		fmt.Fprintf(a.out, "application targets: %d\n", targets)
 	}
 	if state.ICMPDirect {
 		fmt.Fprintln(a.out, "ICMP echo: direct via physical interface (bypasses SOCKS5)")

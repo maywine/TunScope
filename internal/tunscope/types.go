@@ -9,19 +9,28 @@ const (
 )
 
 type Config struct {
-	Proxy        string   `json:"proxy"`
-	Device       string   `json:"device"`
-	Interface    string   `json:"interface,omitempty"`
-	Gateway4     string   `json:"gateway4,omitempty"`
-	Bypass       []string `json:"bypass,omitempty"`
-	Applications []string `json:"applications,omitempty"`
-	MTU          int      `json:"mtu"`
-	LogLevel     string   `json:"logLevel"`
-	AutoBypass   bool     `json:"autoBypass"`
-	IPv6         bool     `json:"ipv6"`
-	TCPOnly      bool     `json:"tcpOnly,omitempty"`
-	TrustedDNS   string   `json:"trustedDNS,omitempty"`
-	ICMPDirect   bool     `json:"icmpDirect"`
+	Proxy           string   `json:"proxy"`
+	Device          string   `json:"device"`
+	Interface       string   `json:"interface,omitempty"`
+	Gateway4        string   `json:"gateway4,omitempty"`
+	Bypass          []string `json:"bypass,omitempty"`
+	Applications    []string `json:"applications,omitempty"`
+	PackageFamilies []string `json:"packageFamilies,omitempty"`
+	MTU             int      `json:"mtu"`
+	LogLevel        string   `json:"logLevel"`
+	AutoBypass      bool     `json:"autoBypass"`
+	IPv6            bool     `json:"ipv6"`
+	TCPOnly         bool     `json:"tcpOnly,omitempty"`
+	TrustedDNS      string   `json:"trustedDNS,omitempty"`
+	ICMPDirect      bool     `json:"icmpDirect"`
+}
+
+func (c Config) HasApplicationTargets() bool {
+	return len(c.Applications) > 0 || len(c.PackageFamilies) > 0
+}
+
+func (c Config) ApplicationTargetCount() int {
+	return len(c.Applications) + len(c.PackageFamilies)
 }
 
 func DefaultConfig() Config {
@@ -43,12 +52,17 @@ type EngineConfig struct {
 	DirectInterface6 string   `json:"directInterface6,omitempty"`
 	DirectSource4    string   `json:"directSource4,omitempty"`
 	Applications     []string `json:"applications,omitempty"`
+	PackageFamilies  []string `json:"packageFamilies,omitempty"`
 	ProxyUDP         bool     `json:"proxyUDP"`
 	TrustedDNS       string   `json:"trustedDNS,omitempty"`
 	IPv6             bool     `json:"ipv6"`
 	ICMPDirect       bool     `json:"icmpDirect"`
 	MTU              int      `json:"mtu"`
 	LogLevel         string   `json:"logLevel"`
+}
+
+func (c EngineConfig) HasApplicationTargets() bool {
+	return len(c.Applications) > 0 || len(c.PackageFamilies) > 0
 }
 
 const (
@@ -136,5 +150,6 @@ type State struct {
 	WasActive       bool                   `json:"wasActive,omitempty"`
 	AutoBypasses    []string               `json:"autoBypasses,omitempty"`
 	Applications    []string               `json:"applications,omitempty"`
+	PackageFamilies []string               `json:"packageFamilies,omitempty"`
 	ICMPDirect      bool                   `json:"icmpDirect,omitempty"`
 }

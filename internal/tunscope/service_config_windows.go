@@ -34,6 +34,7 @@ type WindowsRuntimeStatus struct {
 	OwnerPID        int    `json:"ownerPid,omitempty"`
 	EnginePID       int    `json:"enginePid,omitempty"`
 	Applications    int    `json:"applications,omitempty"`
+	PackageFamilies int    `json:"packageFamilies,omitempty"`
 	RoutesSuspended bool   `json:"routesSuspended,omitempty"`
 }
 
@@ -60,8 +61,16 @@ func NormalizeWindowsServiceConfig(cfg Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	packageFamilies, err := validatePackageFamilyNames(cfg.PackageFamilies)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateApplicationTargetCount(configuredApplications, packageFamilies); err != nil {
+		return Config{}, err
+	}
 	cfg.Applications = configuredApplications
-	if cfg.TCPOnly && len(cfg.Applications) == 0 {
+	cfg.PackageFamilies = packageFamilies
+	if cfg.TCPOnly && !cfg.HasApplicationTargets() {
 		return Config{}, fmt.Errorf("TCP-only compatibility mode requires at least one application")
 	}
 	if len(cfg.Bypass) > 256 {
@@ -82,7 +91,7 @@ func NormalizeWindowsServiceConfig(cfg Config) (Config, error) {
 		normalizedBypass = append(normalizedBypass, value)
 	}
 	cfg.Bypass = normalizedBypass
-	if info.Loopback && len(cfg.Applications) == 0 && len(cfg.Bypass) == 0 && !cfg.AutoBypass {
+	if info.Loopback && !cfg.HasApplicationTargets() && len(cfg.Bypass) == 0 && !cfg.AutoBypass {
 		return Config{}, fmt.Errorf("a loopback proxy in global mode requires a bypass target or auto-bypass")
 	}
 	return cfg, nil
@@ -285,6 +294,7 @@ func ReadWindowsRuntimeStatus() WindowsRuntimeStatus {
 		OwnerPID:        state.OwnerPID,
 		EnginePID:       state.EnginePID,
 		Applications:    len(state.Applications),
+		PackageFamilies: len(state.PackageFamilies),
 		RoutesSuspended: state.RoutesSuspended,
 	}
 }

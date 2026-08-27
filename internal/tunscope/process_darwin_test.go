@@ -48,7 +48,7 @@ func TestDarwinMatcherFindsSelectedTCPFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	matcher, err := newProcessMatcher([]string{executable})
+	matcher, err := newProcessMatcher([]string{executable}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestDarwinMatcherFindsSelectedUDPFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	matcher, err := newProcessMatcher([]string{executable})
+	matcher, err := newProcessMatcher([]string{executable}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestDarwinMatcherInheritsSelectionFromParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	matcher, err := newProcessMatcher([]string{executable})
+	matcher, err := newProcessMatcher([]string{executable}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

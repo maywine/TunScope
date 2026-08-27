@@ -25,12 +25,12 @@ open macos/TunScope.xcodeproj
 
 ## Windows 应用与服务
 
-Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件及其子进程。自包含的 WPF GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
+Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件、Microsoft Store/MSIX 包及其子进程。自包含的 WPF GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
 
 ```powershell
 .\tunscope-cli.exe up `
   --proxy socks5://127.0.0.1:7890 `
-  --app "C:\Program Files\Google\Chrome\Application\chrome.exe"
+  --package-family "OpenAI.Codex_2p2nqsd0c76g0"
 ```
 
 Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会先撤销自身捕获路由，让系统网络、代理和其他 VPN 恢复；新网关与主 IPv4 连续稳定且物理路由通过延迟复核后，才重新绑定 engine 并恢复 TUN。切换到另一块物理网卡时会安全停止并要求重新启动数据面。

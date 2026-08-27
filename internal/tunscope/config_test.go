@@ -31,3 +31,34 @@ func TestRejectBroadApplicationDirectory(t *testing.T) {
 		t.Fatal("expected non-app directory to be rejected")
 	}
 }
+
+func TestValidatePackageFamilyNames(t *testing.T) {
+	got, err := validatePackageFamilyNames([]string{
+		" OpenAI.Codex_2p2nqsd0c76g0 ",
+		"openai.codex_2P2NQSD0C76G0",
+		"Microsoft.WindowsStore_8wekyb3d8bbwe",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Microsoft.WindowsStore_8wekyb3d8bbwe",
+		"OpenAI.Codex_2p2nqsd0c76g0",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+func TestRejectInvalidPackageFamilyNames(t *testing.T) {
+	for _, value := range []string{
+		"OpenAI.Codex",
+		"OpenAI_Codex_2p2nqsd0c76g0",
+		"OpenAI.Codex_short",
+		"OpenAI.Codex_2p2nqsd0c76g!",
+	} {
+		if _, err := validatePackageFamilyNames([]string{value}); err == nil {
+			t.Fatalf("invalid package family %q was accepted", value)
+		}
+	}
+}

@@ -802,6 +802,9 @@ func validateStartupInputs(cfg Config) (proxyInfo, []string, error) {
 	if err != nil {
 		return proxyInfo{}, nil, err
 	}
+	if len(cfg.PackageFamilies) > 0 {
+		return proxyInfo{}, nil, fmt.Errorf("Windows package family matching is not supported on macOS")
+	}
 	configuredApplications, _, err := validateApplicationTargets(cfg.Applications)
 	if err != nil {
 		return proxyInfo{}, nil, err

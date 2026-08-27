@@ -274,6 +274,14 @@ func (d *TrackedProxyDialer) Close() error {
 }
 
 func NewPerAppDialer(proxyURL string, applicationPaths []string, proxyUDP bool, trustedDNS, directInterface4, directInterface6, directSource4 string) (*PerAppDialer, error) {
+	return newPerAppDialer(proxyURL, applicationPaths, nil, proxyUDP, trustedDNS, directInterface4, directInterface6, directSource4)
+}
+
+func NewPerAppDialerWithPackageFamilies(proxyURL string, applicationPaths, packageFamilies []string, proxyUDP bool, trustedDNS, directInterface4, directInterface6, directSource4 string) (*PerAppDialer, error) {
+	return newPerAppDialer(proxyURL, applicationPaths, packageFamilies, proxyUDP, trustedDNS, directInterface4, directInterface6, directSource4)
+}
+
+func newPerAppDialer(proxyURL string, applicationPaths, packageFamilies []string, proxyUDP bool, trustedDNS, directInterface4, directInterface6, directSource4 string) (*PerAppDialer, error) {
 	socks, err := newSOCKS5Dialer(proxyURL)
 	if err != nil {
 		return nil, err
@@ -282,7 +290,7 @@ func NewPerAppDialer(proxyURL string, applicationPaths []string, proxyUDP bool, 
 	if err != nil {
 		return nil, err
 	}
-	matcher, err := newProcessMatcher(applicationPaths)
+	matcher, err := newProcessMatcher(applicationPaths, packageFamilies)
 	if err != nil {
 		return nil, err
 	}

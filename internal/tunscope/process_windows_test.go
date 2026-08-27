@@ -5,6 +5,7 @@ package tunscope
 import (
 	"encoding/binary"
 	"net/netip"
+	"os"
 	"testing"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
@@ -166,11 +167,44 @@ func TestSelectWindowsProcessesIncludesDescendants(t *testing.T) {
 		12: {parentPID: 11, known: true},
 		20: {path: `c:\windows\system32\notepad.exe`, known: true},
 	}
-	selected := selectWindowsProcesses(processes, []string{`C:\Program Files\Google\Chrome\Application\chrome.exe`})
+	selected := selectWindowsProcesses(processes, []string{`C:\Program Files\Google\Chrome\Application\chrome.exe`}, nil)
 	if !selected[10] || !selected[11] || !selected[12] {
 		t.Fatalf("selected process tree is incomplete: %#v", selected)
 	}
 	if selected[20] {
 		t.Fatal("unrelated process was selected")
+	}
+}
+
+func TestSelectWindowsProcessesIncludesPackageFamilyDescendants(t *testing.T) {
+	processes := map[int]windowsProcess{
+		10: {packageFamily: "OpenAI.Codex_2p2nqsd0c76g0", known: true},
+		11: {parentPID: 10, known: true},
+		12: {parentPID: 11, known: true},
+		20: {packageFamily: "Microsoft.WindowsStore_8wekyb3d8bbwe", known: true},
+	}
+	selected := selectWindowsProcesses(processes, nil, []string{"openai.codex_2P2NQSD0C76G0"})
+	if !selected[10] || !selected[11] || !selected[12] {
+		t.Fatalf("selected package process tree is incomplete: %#v", selected)
+	}
+	if selected[20] {
+		t.Fatal("unrelated package process was selected")
+	}
+}
+
+func TestWindowsPackageFamilyNameForCurrentProcess(t *testing.T) {
+	_, packageFamily, err := queryWindowsProcessIdentity(os.Getpid(), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packageFamily == "" {
+		return
+	}
+	validated, err := validatePackageFamilyNames([]string{packageFamily})
+	if err != nil {
+		t.Fatalf("Windows returned invalid package family %q: %v", packageFamily, err)
+	}
+	if len(validated) != 1 || validated[0] != packageFamily {
+		t.Fatalf("normalized package family = %v, want %q", validated, packageFamily)
 	}
 }

@@ -62,7 +62,7 @@ func TestWindowsCaptureRoutesUseWintunIndex(t *testing.T) {
 
 func TestWindowsPhysicalRoutesKeepSharedDNSDirect(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Applications = []string{`C:\Apps\Browser.exe`}
+	cfg.PackageFamilies = []string{"OpenAI.Codex_2p2nqsd0c76g0"}
 	cfg.TrustedDNS = ""
 	physical := windowsPhysicalNetwork{
 		InterfaceIndex: 12,

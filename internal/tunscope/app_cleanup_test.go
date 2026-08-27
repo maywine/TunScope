@@ -932,6 +932,7 @@ func TestValidateStartupInputsRejectsStaticErrors(t *testing.T) {
 		{name: "log level", mutate: func(cfg *Config) { cfg.LogLevel = "verbose" }, want: "invalid --log-level"},
 		{name: "trusted DNS", mutate: func(cfg *Config) { cfg.TrustedDNS = "localhost" }, want: "trusted DNS must be"},
 		{name: "gateway", mutate: func(cfg *Config) { cfg.Gateway4 = "not-an-ip" }, want: "--gateway must be"},
+		{name: "package family", mutate: func(cfg *Config) { cfg.PackageFamilies = []string{"OpenAI.Codex_2p2nqsd0c76g0"} }, want: "not supported on macOS"},
 		{name: "TCP only", mutate: func(cfg *Config) { cfg.TCPOnly = true }, want: "requires at least one --app"},
 	}
 	for _, test := range tests {
