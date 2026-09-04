@@ -1,0 +1,276 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:TunScope.GUI"
+        xmlns:models="using:TunScope.GUI.Models"
+        x:Class="TunScope.GUI.MainWindow"
+        x:DataType="local:GuiController"
+        Title="TunScope"
+        Width="1020" Height="790"
+        MinWidth="880" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        Icon="/Assets/TunScopeIcon.png"
+        Background="{DynamicResource AppBackgroundBrush}"
+        FontFamily="PingFang SC, Microsoft YaHei UI, sans-serif">
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Padding" Value="15,8" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="MinWidth" Value="88" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#0B63CE" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button:disabled">
+      <Setter Property="Opacity" Value="0.48" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Padding" Value="8,6" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#1677FF" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="TextBox:disabled">
+      <Setter Property="Opacity" Value="0.58" />
+      <Setter Property="Background" Value="{DynamicResource ControlDisabledBrush}" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="CheckBox">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="CheckBox:disabled">
+      <Setter Property="Opacity" Value="0.52" />
+    </Style>
+    <Style Selector="TabControl">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+    </Style>
+    <Style Selector="TabItem">
+      <Setter Property="Foreground" Value="{DynamicResource TabForegroundBrush}" />
+      <Setter Property="Background" Value="{DynamicResource TabBackgroundBrush}" />
+    </Style>
+    <Style Selector="TabItem:selected">
+      <Setter Property="Foreground" Value="{DynamicResource TabSelectedForegroundBrush}" />
+      <Setter Property="Background" Value="{DynamicResource TabSelectedBrush}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="ListBox">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="16" />
+    </Style>
+    <Style Selector="TextBlock.field-label">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0,0,14,0" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </Window.Styles>
+
+  <Grid Margin="20" RowDefinitions="Auto,12,*,14,Auto">
+    <Border Grid.Row="0" Classes="card">
+      <Grid ColumnDefinitions="Auto,12,*,Auto">
+        <Border Width="12" Height="44" CornerRadius="6" Background="{Binding StatusBrush}" />
+        <StackPanel Grid.Column="2" Spacing="4">
+          <TextBlock Text="{Binding StatusTitle}" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding StatusDetail}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Button Grid.Column="3" Content="刷新" Click="RefreshButton_Click" IsEnabled="{Binding !IsBusy}" Margin="8,0,0,0" />
+      </Grid>
+    </Border>
+
+    <TabControl Grid.Row="2" Background="{DynamicResource CardBackgroundBrush}">
+      <TabItem Header="代理与网络">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid Margin="22"
+                ColumnDefinitions="145,*,18,145,*"
+                RowDefinitions="Auto,14,Auto,14,Auto,14,Auto,14,Auto,14,Auto,14,Auto,18,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field-label" Text="SOCKS5 代理" />
+            <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
+                     Text="{Binding ProxyUrl, Mode=TwoWay}"
+                     PlaceholderText="socks5://127.0.0.1:7890"
+                     IsEnabled="{Binding CanEditConfiguration}" />
+            <Button Grid.Row="0" Grid.Column="4" Content="测试代理" Click="TestProxyButton_Click"
+                    IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Classes="field-label" Text="可信 DNS（可选）" />
+            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding TrustedDns, Mode=TwoWay}"
+                     PlaceholderText="留空使用系统 DNS" IsEnabled="{Binding CanEditConfiguration}" />
+            <TextBlock Grid.Row="2" Grid.Column="3" Classes="field-label" Text="TUN 设备名称" />
+            <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Device, Mode=TwoWay}"
+                     IsEnabled="{Binding CanEditConfiguration}" />
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Classes="field-label" Text="物理网卡（可选）" />
+            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding InterfaceName, Mode=TwoWay}"
+                     PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
+            <TextBlock Grid.Row="4" Grid.Column="3" Classes="field-label" Text="IPv4 网关（可选）" />
+            <TextBox Grid.Row="4" Grid.Column="4" Text="{Binding Gateway4, Mode=TwoWay}"
+                     PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
+
+            <TextBlock Grid.Row="6" Grid.Column="0" Classes="field-label" Text="MTU" />
+            <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding MtuText, Mode=TwoWay}"
+                     IsEnabled="{Binding CanEditConfiguration}" />
+            <TextBlock Grid.Row="6" Grid.Column="3" Classes="field-label" Text="日志级别" />
+            <ComboBox Grid.Row="6" Grid.Column="4"
+                      ItemsSource="{Binding LogLevels}"
+                      SelectedItem="{Binding LogLevel, Mode=TwoWay}"
+                      IsEnabled="{Binding CanEditConfiguration}" />
+
+            <CheckBox Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2"
+                      IsChecked="{Binding Ipv6, Mode=TwoWay}" Content="接管 IPv6"
+                      IsEnabled="{Binding CanEditConfiguration}" />
+            <CheckBox Grid.Row="8" Grid.Column="3" Grid.ColumnSpan="2"
+                      IsChecked="{Binding AutoBypass, Mode=TwoWay}" Content="自动发现本地代理远端节点"
+                      IsEnabled="{Binding CanEditConfiguration}" />
+
+            <CheckBox Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="2"
+                      IsChecked="{Binding TcpOnly, Mode=TwoWay}" Content="TCP-only 稳定模式"
+                      IsEnabled="{Binding CanEditConfiguration}" />
+            <TextBlock Grid.Row="10" Grid.Column="3" Grid.ColumnSpan="2" Classes="hint"
+                       Text="阻断所选应用的全部非 DNS UDP，让支持回退的应用改走 TCP。" />
+
+            <CheckBox Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="5"
+                      IsChecked="{Binding IcmpDirect, Mode=TwoWay}"
+                      Content="ICMP 直连（所有应用的 ping 绕过 SOCKS5；网络切换时自动暂停）"
+                      IsEnabled="{Binding CanEditConfiguration}" />
+
+            <Border Grid.Row="14" Grid.Column="0" Grid.ColumnSpan="5"
+                    Background="{DynamicResource InfoBackgroundBrush}" BorderBrush="{DynamicResource InfoBorderBrush}" BorderThickness="1"
+                    CornerRadius="6" Padding="12">
+              <TextBlock Classes="hint" Text="{Binding LifecycleHint}" />
+            </Border>
+          </Grid>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="应用分流">
+        <Grid Margin="22" RowDefinitions="Auto,12,Auto,6,*,8,Auto,18,Auto,6,*,8,Auto">
+          <TextBlock Text="{Binding ApplicationModeHint}" Foreground="{DynamicResource TextSecondaryBrush}" />
+          <TextBlock Grid.Row="2" Text="应用程序" />
+          <ListBox x:Name="ApplicationsListBox" Grid.Row="4"
+                   ItemsSource="{Binding Applications}" SelectionMode="Multiple,Toggle">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="models:TargetApplication">
+                <StackPanel Margin="4" Spacing="2">
+                  <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SecondaryText}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
+                             FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
+                             TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <StackPanel Grid.Row="6" Orientation="Horizontal">
+            <Button Content="{Binding ApplicationPickerLabel}" Click="AddApplicationButton_Click"
+                    IsEnabled="{Binding CanEditConfiguration}" />
+            <Button Content="移除选中" Click="RemoveApplicationButton_Click"
+                    IsEnabled="{Binding CanEditConfiguration}" />
+          </StackPanel>
+
+          <TextBlock Grid.Row="8" Text="Microsoft Store / MSIX PackageFamilyName"
+                     IsVisible="{Binding SupportsPackageFamilies}" />
+          <ListBox x:Name="PackageFamiliesListBox" Grid.Row="10"
+                   ItemsSource="{Binding PackageFamilies}" SelectionMode="Multiple,Toggle"
+                   IsVisible="{Binding SupportsPackageFamilies}" />
+          <StackPanel Grid.Row="12" Orientation="Horizontal" IsVisible="{Binding SupportsPackageFamilies}">
+            <TextBox Width="420" Text="{Binding PackageFamilyInput, Mode=TwoWay}"
+                     PlaceholderText="OpenAI.Codex_2p2nqsd0c76g0"
+                     FontFamily="ui-monospace, Cascadia Mono, Consolas"
+                     IsEnabled="{Binding CanEditConfiguration}" />
+            <Button Content="添加包族" Click="AddPackageFamilyButton_Click"
+                    IsEnabled="{Binding CanEditConfiguration}" />
+            <Button Content="移除选中" Click="RemovePackageFamilyButton_Click"
+                    IsEnabled="{Binding CanEditConfiguration}" />
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="绕行与日志">
+        <Grid Margin="22" ColumnDefinitions="0.42*,18,0.58*" RowDefinitions="Auto,10,*">
+          <TextBlock Grid.Column="0" Text="始终直连（域名、IP 或 CIDR）" />
+          <TextBlock Grid.Column="2" Text="运行日志（最多保留末尾 128 KiB）" />
+          <Grid Grid.Row="2" Grid.Column="0" RowDefinitions="Auto,8,*,8,Auto">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding BypassInput, Mode=TwoWay}"
+                       KeyDown="BypassInput_KeyDown"
+                       FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
+                       PlaceholderText="example.com、10.0.0.0/8"
+                       IsEnabled="{Binding CanEditConfiguration}" />
+              <Button Grid.Column="1" Content="添加" Click="AddBypassButton_Click"
+                      IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
+            </Grid>
+            <TextBlock Grid.Row="1" />
+            <ListBox x:Name="BypassTargetsListBox" Grid.Row="2"
+                     ItemsSource="{Binding BypassTargets}" SelectionMode="Multiple,Toggle"
+                     FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas" />
+            <TextBlock Grid.Row="3" />
+            <Grid Grid.Row="4" ColumnDefinitions="*,Auto">
+              <TextBlock Classes="hint" VerticalAlignment="Center"
+                         Text="可一次粘贴多个目标，以空格、逗号、分号或换行分隔。" />
+              <Button Grid.Column="1" Content="移除选中" Click="RemoveBypassButton_Click"
+                      IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
+            </Grid>
+          </Grid>
+          <TextBox x:Name="LogTextBox" Grid.Row="2" Grid.Column="2" Text="{Binding LogText}"
+                   IsReadOnly="True" AcceptsReturn="True"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                   VerticalContentAlignment="Top"
+                   FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
+                   Background="{DynamicResource LogBackgroundBrush}" Foreground="{DynamicResource LogForegroundBrush}" BorderThickness="0" />
+        </Grid>
+      </TabItem>
+    </TabControl>
+
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto">
+      <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock Text="主题" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0" />
+        <ComboBox Width="112" ItemsSource="{Binding ThemeModes}" SelectedItem="{Binding ThemeMode, Mode=TwoWay}"
+                  Margin="0,0,12,0" />
+        <Button Content="移除旧服务" Click="UninstallButton_Click"
+                IsVisible="{Binding HasLegacyService}" IsEnabled="{Binding CanRemoveLegacyService}" Margin="0" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+        <ProgressBar Width="72" Height="4" IsIndeterminate="True" IsVisible="{Binding ShowProgress}" />
+        <TextBlock Text="{Binding OperationText}" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+      </StackPanel>
+      <StackPanel Grid.Column="2" Orientation="Horizontal">
+        <Button Content="保存配置" Click="SaveButton_Click" IsEnabled="{Binding CanSave}" />
+        <Button Classes="primary" Content="启动" Click="StartButton_Click" IsEnabled="{Binding CanStart}"
+                Background="#1677FF" BorderBrush="#0B63CE" Foreground="White" />
+        <Button Content="保存并重启" Click="RestartButton_Click" IsEnabled="{Binding CanRestart}" />
+        <Button Content="停止" Click="StopButton_Click" IsEnabled="{Binding CanStop}" Margin="0" />
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>

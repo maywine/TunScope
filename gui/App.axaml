@@ -1,0 +1,54 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="TunScope.GUI.App"
+             RequestedThemeVariant="Default">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F3F5F8" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#DDE2EA" />
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#172033" />
+          <SolidColorBrush x:Key="TextSecondaryBrush" Color="#596579" />
+          <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ControlDisabledBrush" Color="#EEF1F5" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#AEB8C7" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#E8EEF7" />
+          <SolidColorBrush x:Key="TabBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="TabSelectedBrush" Color="#EAF2FF" />
+          <SolidColorBrush x:Key="TabForegroundBrush" Color="#475467" />
+          <SolidColorBrush x:Key="TabSelectedForegroundBrush" Color="#0B63CE" />
+          <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="InfoBorderBrush" Color="#E3E8EF" />
+          <SolidColorBrush x:Key="LogBackgroundBrush" Color="#10151D" />
+          <SolidColorBrush x:Key="LogForegroundBrush" Color="#DDE7F5" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#11151C" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#191F2A" />
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#344054" />
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F2F4F7" />
+          <SolidColorBrush x:Key="TextSecondaryBrush" Color="#AAB4C3" />
+          <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#202734" />
+          <SolidColorBrush x:Key="ControlDisabledBrush" Color="#242B36" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#526071" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#273142" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#344054" />
+          <SolidColorBrush x:Key="TabBackgroundBrush" Color="#202734" />
+          <SolidColorBrush x:Key="TabSelectedBrush" Color="#263E61" />
+          <SolidColorBrush x:Key="TabForegroundBrush" Color="#B8C4D4" />
+          <SolidColorBrush x:Key="TabSelectedForegroundBrush" Color="#70AEFF" />
+          <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#202734" />
+          <SolidColorBrush x:Key="InfoBorderBrush" Color="#3C4758" />
+          <SolidColorBrush x:Key="LogBackgroundBrush" Color="#0B0F14" />
+          <SolidColorBrush x:Key="LogForegroundBrush" Color="#DDE7F5" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+</Application>

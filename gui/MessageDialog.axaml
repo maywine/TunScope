@@ -1,0 +1,16 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TunScope.GUI.MessageDialog"
+        Width="480" SizeToContent="Height"
+        MinHeight="180" MaxHeight="520"
+        CanResize="False" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource AppBackgroundBrush}">
+  <Grid Margin="24" RowDefinitions="Auto,16,*,22,Auto">
+    <TextBlock x:Name="TitleText" FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap" />
+    <ScrollViewer Grid.Row="2" MaxHeight="320" VerticalScrollBarVisibility="Auto">
+      <TextBlock x:Name="MessageText" TextWrapping="Wrap" />
+    </ScrollViewer>
+    <StackPanel x:Name="ButtonsPanel" Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" />
+  </Grid>
+</Window>

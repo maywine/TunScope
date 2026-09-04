@@ -63,7 +63,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "down":
 		err = app.Down()
 	case "status":
-		err = app.Status()
+		err = runStatus(app, args[1:], stderr)
 	case "doctor":
 		err = runDoctor(app, args[1:], stderr)
 	case "service":
@@ -198,7 +198,7 @@ Usage:
   tunscope-cli up --proxy socks5://127.0.0.1:7890 --package-family "OpenAI.Codex_2p2nqsd0c76g0"
   tunscope-cli up --config C:\path\to\config.json
   tunscope-cli down
-  tunscope-cli status
+  tunscope-cli status [--json]
   tunscope-cli doctor --proxy socks5://127.0.0.1:7890
   tunscope-cli service install --startup manual
   tunscope-cli service configure --stdin

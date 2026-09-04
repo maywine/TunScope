@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,22 @@ import (
 
 	"github.com/maywine/TunScope/internal/tunscope"
 )
+
+func TestStatusJSONStopped(t *testing.T) {
+	t.Setenv("TUNSCOPE_STATE_DIR", t.TempDir())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := run([]string{"status", "--json"}, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("run status exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	var report tunscope.RuntimeStatusReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode status JSON: %v; output = %q", err, stdout.String())
+	}
+	if report.Status != "stopped" {
+		t.Fatalf("status = %q, want stopped", report.Status)
+	}
+}
 
 func TestLoadConfigPreservesBypassTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")

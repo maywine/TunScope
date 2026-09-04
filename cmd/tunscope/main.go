@@ -95,7 +95,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "down":
 		err = app.Down()
 	case "status":
-		err = app.Status()
+		err = runStatus(app, args[1:], stderr)
 	case "doctor":
 		err = runDoctor(app, args[1:], stderr)
 	case "version", "--version", "-v":
@@ -218,7 +218,7 @@ Usage:
   tunscope up --proxy socks5://127.0.0.1:7890 --app /Applications/Example.app
   tunscope up --config /path/to/config.json
   tunscope down
-  tunscope status
+  tunscope status [--json]
   tunscope doctor --proxy socks5://127.0.0.1:7890
   tunscope version
 

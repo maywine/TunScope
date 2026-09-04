@@ -1,6 +1,6 @@
 # TunScope macOS 应用
 
-这是无需 Network Extension、无需付费 Apple Developer Program 的本机版 TunScope。普通 SwiftUI 应用负责选择程序和显示状态，应用包内的单文件 Go helper 以管理员身份创建 `utun`、管理路由并运行 tun2socks。
+这是无需 Network Extension、无需付费 Apple Developer Program 的本机版 TunScope。跨平台 Avalonia GUI 负责选择程序、配置和显示状态，应用包内的单文件 Go helper 以管理员身份创建 `utun`、管理路由并运行 tun2socks。
 
 ## 工作方式
 
@@ -34,32 +34,35 @@ ICMP Echo（默认开启）
 
 ## 构建
 
-需要 macOS 13 或更高版本、Xcode 16 或更高版本，以及系统中现有的 Go 1.23.1 或更高版本。
+需要 macOS 14 或更高版本、.NET 10 SDK、Xcode Command Line Tools 16 或更高版本，以及 Go 1.23.1 或更高版本。
 
 ```bash
-open TunScope.xcodeproj
+cd ..
+make macos-gui VERSION=0.3.18
 ```
 
-选择 `TunScope` scheme 后运行即可。工程构建阶段会用系统 `go` 生成对应架构的 `tunscope` helper，并放进 `TunScope.app/Contents/Resources/`。
+构建脚本会按当前 Mac 架构生成 `dist/tunscope-<版本>-osx-<架构>/TunScope.app`。也可通过 `MACOS_RID=osx-x64` 或 `MACOS_RID=osx-arm64` 明确构建 Intel/Apple Silicon 版本。脚本会用系统 `go` 生成同架构的 `tunscope-helper`，并放进 `TunScope.app/Contents/Resources/`。
 
-应用不包含受限 entitlement，工程默认使用本机 ad-hoc 签名，不要求登录 Apple Developer 账号。若将来需要分发给其他 Mac，可以自行切换到 Developer ID。
+应用不包含受限 entitlement，构建脚本默认使用本机 ad-hoc 签名，不要求登录 Apple Developer 账号。若将来需要直接分发给其他 Mac，仍应改用 Developer ID 签名并完成 notarization。
 
 ## 使用
 
 1. 启动本地代理软件并开放 SOCKS5，例如 `socks5://127.0.0.1:7890`；支持 UDP 时可以代理 QUIC 和游戏流量。
 2. 在 TunScope 中测试代理并添加目标 `.app`。默认保持“TCP 稳定模式”开启；需要代理 UDP 或游戏时再关闭。按需保留“ICMP 直连”，严格防泄漏时关闭。
-   如有开发机、内网或其他必须完全绕过 TUN 的目标，可在“始终直连”中填写 IP、CIDR 或域名，并用空格或逗号分隔。该配置按当前 macOS 用户保存。
+   如有开发机、内网或其他必须完全绕过 TUN 的目标，可在“始终直连”中填写 IP、CIDR 或域名，并用空格或逗号分隔。配置保存在当前用户的 `~/Library/Application Support/TunScope/config.json`；首次运行会尽力迁移旧 SwiftUI 版本的 UserDefaults。
 3. 点击“启动 TUN”，在 macOS 管理员授权窗口中确认。
 4. 使用完成后点击“停止 TUN”。应用会删除自己添加的路由并关闭 utun。
 
 root helper 在后台运行，关闭 TunScope 窗口不会自动停止代理。也可以在终端中检查或停止：
 
 ```bash
-/path/to/TunScope.app/Contents/Resources/tunscope status
-sudo /path/to/TunScope.app/Contents/Resources/tunscope down
+/path/to/TunScope.app/Contents/Resources/tunscope-helper status --json
+sudo /path/to/TunScope.app/Contents/Resources/tunscope-helper down
 ```
 
 GUI 通过一个短生命周期的管理员 launcher，在独立 session/process group 中启动长期运行的 owner；owner 随后启动的 engine 会继承该 session/process group。因此 macOS 回收空闲的 `authtrampoline` 授权服务时，不会向 TUN 进程传递生命周期信号。命令行直接执行 `sudo tunscope up` 时仍保持前台运行，并支持 `Ctrl-C` 清理。
+
+这条 `osascript` 授权路径用于保持便携、ad-hoc 签名和零安装体验，并不等同于 macOS 正式的后台服务注册机制。若面向公众使用 Developer ID 分发，应优先迁移到 Service Management 的 `SMAppService`/LaunchDaemon，并通过经过调用方校验的受限 IPC 控制特权 helper。
 
 自动网络监控在物理路由消失时，会立即撤下 TunScope 安装的捕获、绕行和 scoped 路由，清除 engine 的直连源地址并关闭旧连接，但保留 owner、engine 和 `utun` 设备；这段时间所有应用使用 macOS 系统路由，先让 DHCP、Trojan、corplink 等传输恢复。监控还会订阅 macOS 的物理 Link、IPv4 和 DHCP 动态存储通知，因此同一网卡在同一网段内切换 BSSID、重新取得相同 IP 和网关时也会进入恢复流程；连续通知会重新开始稳定性窗口，避免在 DHCP 最终发布前过早恢复。DHCP 返回后，TunScope 会等待网关、接口和主 IPv4 连续稳定，重建物理 scoped 路由，并在下一轮确认 macOS 没有于切换末期再次清掉它们；核验除检查路由表外，还会创建一个不发送数据的 `IP_BOUND_IF` UDP socket 来确认 XNU 能为未选应用的真实直连方式解析出口；这可以识别仍能被 `route` 显示、实际却返回 `ENETUNREACH` 的陈旧 scoped 路由。Mac 从睡眠恢复时，即使默认路由、网卡和地址完全未变，监控也会根据轮询时间跳变精确核验全部 scoped 网段，并在随后一轮逐条复核，以捕获 macOS 延迟清除手工路由的情况；正常运行期间还会低频轮换审计。任何审计失败都会先暂停 TUN 捕获，让未选应用立即回退到系统网络，再进入同一套重建和双重核验流程。如果替代路由持续 10 秒仍不可用、完整唤醒期间物理网络累计 30 秒不可用，或物理网卡发生变化，root owner 会完整清理本轮数据面和路由并进入“等待网络恢复”；物理路径连续 3 次稳定、旧 `utun` 已消失后自动重建。首次启动在静态配置校验通过后也会先持久化 owner 状态；如果 SOCKS5 传输、trusted DNS、默认路由或物理地址只是暂时不可用，会进入同一等待状态，而不是退出。重试采用 1/2/5/10/30 秒退避，认证、协议、设备冲突等确定性错误仍立即报告；GUI 的“测试”按钮是手动诊断，不再阻止 supervisor 接管启动。`down`/停止按钮可随时取消；睡眠和暗唤醒阶段不推进稳定窗口。该策略以可用性优先，因此 Wi‑Fi 切换或自动修复期间选中应用存在短暂直连窗口。
 

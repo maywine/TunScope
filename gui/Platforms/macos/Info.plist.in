@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleExecutable</key>
+    <string>TunScope</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.gfheng.tunscope</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>TunScope</string>
+    <key>CFBundleDisplayName</key>
+    <string>TunScope</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@MARKETING_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@BUILD_VERSION@</string>
+    <key>TunScopeVersion</key>
+    <string>@TUNSCOPE_VERSION@</string>
+    <key>CFBundleIconFile</key>
+    <string>TunScope.icns</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>

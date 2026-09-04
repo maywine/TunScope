@@ -1,12 +1,12 @@
 # TunScope
 
-TunScope 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5，并可选择把 ICMP Echo 从物理网卡直接转发。当前提供完整的 macOS 应用/命令行版本，以及带 WPF GUI、Windows Service 和 CLI 的 Windows 10/11 x64 版本。
+TunScope 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、IPv6、TCP 和 UDP 数据流量转发到本地 SOCKS5，并可选择把 ICMP Echo 从物理网卡直接转发。macOS 与 Windows 共用 Avalonia GUI 和 Go 数据面；平台适配层分别处理应用选择、管理员授权、进程生命周期和打包。
 
 ## macOS 应用
 
-工程入口是 `macos/TunScope.xcodeproj`：
+GUI 工程入口是 `gui/TunScope.GUI.csproj`：
 
-- SwiftUI 界面负责测试代理、选择 `.app`、启动和停止服务。
+- Avalonia 界面负责测试代理、选择 `.app`、配置数据面、查看日志以及启动和停止服务。
 - 应用包内的单文件 Go helper 以管理员身份创建 `utun` 并管理路由。
 - macOS `libproc` 把每条 TCP/UDP 连接映射到应用或父进程。
 - 选中应用走本地 SOCKS5；其他应用由绑定物理网卡的 socket 配合接口作用域路由直连，避免直连流量再次进入 TUN；暂时无法识别的连接保持直连，已确认属于 engine 或归属冲突的连接仍会阻断以防回环。
@@ -18,14 +18,14 @@ TunScope 是仅在本机运行的轻量 TUN 工具，把选定应用的 IPv4、I
 构建步骤见 [macos/README.md](macos/README.md)：
 
 ```bash
-open macos/TunScope.xcodeproj
+make macos-gui
 ```
 
-需要 macOS 13+、完整 Xcode 16+ 和系统 Go 1.23.1+。免费 Personal Team 或本机 ad-hoc 签名均可。
+Avalonia GUI 支持 macOS 14+（Apple Silicon 或 Intel）；构建需要 .NET 10 SDK、Xcode Command Line Tools 16+ 和 Go 1.23.1+。本地构建默认使用 ad-hoc 签名。
 
 ## Windows 应用与服务
 
-Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件、Microsoft Store/MSIX 包及其子进程。自包含的 WPF GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
+Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 的 TCP/UDP owner-PID 表识别可执行文件、Microsoft Store/MSIX 包及其子进程。自包含的 Avalonia GUI 无需安装服务，直接管理前台数据面、应用列表和代理配置，正常关闭时会安全恢复路由；标准 Windows Service 和前台 CLI 仍作为可选运行方式保留。
 
 ```powershell
 .\tunscope-cli.exe up `
@@ -33,7 +33,7 @@ Windows 版本使用 Wintun 创建三层虚拟网卡，通过 Windows IP Helper 
   --package-family "OpenAI.Codex_2p2nqsd0c76g0"
 ```
 
-Windows 10/11 x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会先撤销自身捕获路由，让系统网络、代理和其他 VPN 恢复；新网关与主 IPv4 连续稳定且物理路由通过延迟复核后，才重新绑定 engine 并恢复 TUN。切换到另一块物理网卡时会安全停止并要求重新启动数据面。
+Windows 10 22H2 或 Windows 11 22H2+ x64 可从 [GitHub Releases](https://github.com/maywine/TunScope/releases) 获取带 SHA-256 的自包含包；包内包含 GUI、服务/CLI、经官方归档校验取得的签名 `wintun.dll`，目标机器无需预装 .NET。解压后可直接运行 GUI；安装脚本只用于可选的 Windows Service。构建、便携运行、Service 命令、管理员权限、DNS 和已知限制见 [windows/README.md](windows/README.md)。同一物理网卡切换 Wi-Fi 时会先撤销自身捕获路由，让系统网络、代理和其他 VPN 恢复；新网关与主 IPv4 连续稳定且物理路由通过延迟复核后，才重新绑定 engine 并恢复 TUN。切换到另一块物理网卡时会安全停止并要求重新启动数据面。
 
 ## 搭配 dnscrypt-proxy
 

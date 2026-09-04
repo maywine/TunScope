@@ -13,8 +13,8 @@
 /macos/DataPlane/lib/libtunscope.h
 /macos/DerivedData/
 /macos/com.apple.DeveloperTools/
-/windows/gui/bin/
-/windows/gui/obj/
+/gui/bin/
+/gui/obj/
 **/xcuserdata/
 *.xcuserstate
 .DS_Store

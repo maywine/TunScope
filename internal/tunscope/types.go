@@ -25,6 +25,25 @@ type Config struct {
 	ICMPDirect      bool     `json:"icmpDirect"`
 }
 
+// RuntimeStatusReport is the stable machine-readable status contract used by
+// cross-platform control surfaces. It intentionally contains only redacted
+// runtime data and never exposes proxy credentials.
+type RuntimeStatusReport struct {
+	Status          string         `json:"status"`
+	Detail          string         `json:"detail,omitempty"`
+	Phase           string         `json:"phase,omitempty"`
+	Proxy           string         `json:"proxy,omitempty"`
+	Device          string         `json:"device,omitempty"`
+	Interface       string         `json:"interface,omitempty"`
+	OwnerPID        int            `json:"ownerPid,omitempty"`
+	EnginePID       int            `json:"enginePid,omitempty"`
+	Applications    int            `json:"applications,omitempty"`
+	PackageFamilies int            `json:"packageFamilies,omitempty"`
+	RoutesSuspended bool           `json:"routesSuspended,omitempty"`
+	ICMPDirect      bool           `json:"icmpDirect,omitempty"`
+	RouteCounts     map[string]int `json:"routeCounts,omitempty"`
+}
+
 func (c Config) HasApplicationTargets() bool {
 	return len(c.Applications) > 0 || len(c.PackageFamilies) > 0
 }

@@ -1704,13 +1704,59 @@ func (a *App) downWhileLocked(ownerWasSignaled bool) error {
 }
 
 func (a *App) Status() error {
-	state, err := loadState()
-	if errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(a.out, "status: stopped")
-		return nil
-	}
+	report, err := a.runtimeStatusReport()
 	if err != nil {
 		return err
+	}
+	fmt.Fprintf(a.out, "status: %s\n", report.Status)
+	if report.Status == "stopped" {
+		return nil
+	}
+	if report.Detail != "" {
+		fmt.Fprintf(a.out, "status detail: %s\n", report.Detail)
+	}
+	fmt.Fprintf(a.out, "phase: %s\n", report.Phase)
+	fmt.Fprintf(a.out, "proxy: %s\n", report.Proxy)
+	fmt.Fprintf(a.out, "device: %s\n", report.Device)
+	fmt.Fprintf(a.out, "physical interface: %s\n", report.Interface)
+	if report.RoutesSuspended {
+		fmt.Fprintln(a.out, "TUN capture: suspended while network readiness recovers")
+	}
+	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", report.OwnerPID, report.EnginePID)
+	if report.Applications > 0 {
+		fmt.Fprintf(a.out, "applications: %d\n", report.Applications)
+	}
+	if report.ICMPDirect {
+		fmt.Fprintln(a.out, "ICMP echo: direct via physical interface (bypasses SOCKS5)")
+	}
+	keys := make([]string, 0, len(report.RouteCounts))
+	for key := range report.RouteCounts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Fprintf(a.out, "%s routes: %d\n", key, report.RouteCounts[key])
+	}
+	return nil
+}
+
+func (a *App) StatusJSON() error {
+	report, err := a.runtimeStatusReport()
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(a.out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
+func (a *App) runtimeStatusReport() (RuntimeStatusReport, error) {
+	state, err := loadState()
+	if errors.Is(err, os.ErrNotExist) {
+		return RuntimeStatusReport{Status: "stopped"}, nil
+	}
+	if err != nil {
+		return RuntimeStatusReport{}, err
 	}
 	status := "stale"
 	statusDetail := ""
@@ -1739,37 +1785,25 @@ func (a *App) Status() error {
 			status = "active"
 		}
 	}
-	fmt.Fprintf(a.out, "status: %s\n", status)
-	if statusDetail != "" {
-		fmt.Fprintf(a.out, "status detail: %s\n", statusDetail)
-	}
-	fmt.Fprintf(a.out, "phase: %s\n", state.Phase)
-	fmt.Fprintf(a.out, "proxy: %s\n", state.Proxy)
-	fmt.Fprintf(a.out, "device: %s\n", state.Device)
-	fmt.Fprintf(a.out, "physical interface: %s\n", state.Interface)
-	if state.RoutesSuspended {
-		fmt.Fprintln(a.out, "TUN capture: suspended while network readiness recovers")
-	}
-	fmt.Fprintf(a.out, "owner PID: %d\nengine PID: %d\n", state.OwnerPID, state.EnginePID)
-	if len(state.Applications) > 0 {
-		fmt.Fprintf(a.out, "applications: %d\n", len(state.Applications))
-	}
-	if state.ICMPDirect {
-		fmt.Fprintln(a.out, "ICMP echo: direct via physical interface (bypasses SOCKS5)")
-	}
 	counts := make(map[string]int)
 	for _, route := range state.Routes {
 		counts[route.Purpose]++
 	}
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Fprintf(a.out, "%s routes: %d\n", key, counts[key])
-	}
-	return nil
+	return RuntimeStatusReport{
+		Status:          status,
+		Detail:          statusDetail,
+		Phase:           state.Phase,
+		Proxy:           state.Proxy,
+		Device:          state.Device,
+		Interface:       state.Interface,
+		OwnerPID:        state.OwnerPID,
+		EnginePID:       state.EnginePID,
+		Applications:    len(state.Applications),
+		PackageFamilies: len(state.PackageFamilies),
+		RoutesSuspended: state.RoutesSuspended,
+		ICMPDirect:      state.ICMPDirect,
+		RouteCounts:     counts,
+	}, nil
 }
 
 func activeStateIdentity(state *State) (bool, string) {

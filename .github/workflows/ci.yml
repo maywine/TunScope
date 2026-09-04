@@ -16,26 +16,27 @@ jobs:
         with:
           go-version: '1.23.x'
           cache: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
       - run: go test ./...
       - run: go vet ./...
       - run: make build
-      - name: Build macOS app and verify bundled versions
+      - name: Build Avalonia macOS app and verify bundled versions
         shell: bash
         run: |
-          derived_data="$(mktemp -d)"
-          trap 'rm -rf "$derived_data"' EXIT
-          xcodebuild \
-            -project macos/TunScope.xcodeproj \
-            -scheme TunScope \
-            -configuration Release \
-            -derivedDataPath "$derived_data" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
+          version="$(./bin/tunscope version | awk '{print $2}')"
+          case "$(uname -m)" in
+            arm64) rid=osx-arm64 ;;
+            x86_64) rid=osx-x64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          ./gui/package-macos.sh "$version" "$rid" "$RUNNER_TEMP/tunscope-macos"
 
-          app_path="$derived_data/Build/Products/Release/TunScope.app"
+          app_path="$RUNNER_TEMP/tunscope-macos/tunscope-$version-$rid/TunScope.app"
           app_version="$(/usr/libexec/PlistBuddy -c 'Print :TunScopeVersion' "$app_path/Contents/Info.plist")"
           marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
-          helper_version="$("$app_path/Contents/Resources/tunscope" version)"
+          helper_version="$("$app_path/Contents/Resources/tunscope-helper" version)"
           cli_version="$(./bin/tunscope version)"
           if [[ ! "$marketing_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid numeric macOS marketing version: $marketing_version" >&2
@@ -45,6 +46,8 @@ jobs:
             echo "Version mismatch: app=$app_version helper='$helper_version' cli='$cli_version'" >&2
             exit 1
           fi
+          test -x "$app_path/Contents/MacOS/TunScope"
+          codesign --verify --deep --strict "$app_path"
 
   windows:
     runs-on: windows-2022
@@ -56,7 +59,7 @@ jobs:
           cache: true
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Test Windows
         shell: pwsh
         run: |
@@ -81,7 +84,7 @@ jobs:
             throw "Unexpected version output: $actual"
           }
           $version = $match.Groups['version'].Value
-          [xml]$guiProject = Get-Content -LiteralPath .\windows\gui\TunScope.GUI.csproj -Raw
+          [xml]$guiProject = Get-Content -LiteralPath .\gui\TunScope.GUI.csproj -Raw
           $defaultGuiVersion = @($guiProject.Project.PropertyGroup.Version | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[0]
           if ($defaultGuiVersion -cne $version) {
             throw "Default GUI version '$defaultGuiVersion' does not match CLI version '$version'"
@@ -90,7 +93,7 @@ jobs:
       - name: Build self-contained Windows GUI
         shell: pwsh
         run: |
-          dotnet publish .\windows\gui\TunScope.GUI.csproj `
+          dotnet publish .\gui\TunScope.GUI.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `

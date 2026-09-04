@@ -1,15 +1,15 @@
 # TunScope for Windows
 
-Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面和可选的标准 Windows Service，支持 Windows 10/11 x64、全局 TUN、按可执行文件或 PackageFamilyName 分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 直接管理前台数据面，正常关闭窗口时会先停止 TUN 并恢复路由。
+Windows 版本提供无需安装的跨平台 Avalonia 图形控制面板、命令行数据面和可选的标准 Windows Service，支持 Windows 10 22H2 或 Windows 11 22H2+ x64、全局 TUN、按可执行文件或 PackageFamilyName 分流、IPv4/IPv6、TCP/UDP、状态恢复以及同一物理网卡上的 Wi-Fi 切换。GUI 直接管理前台数据面，正常关闭窗口时会先停止 TUN 并恢复路由。
 
 ## 运行要求
 
-- Windows 10 或 Windows 11 x64。
+- Windows 10 22H2（build 19045）或 Windows 11 22H2（build 22621）及以上版本，x64。
 - GUI、TUN 数据面和服务控制需要管理员权限；前台 CLI 的 `doctor` 不修改系统。
 - 本地 SOCKS5 服务，例如 `socks5://127.0.0.1:7890`。
 - 官方签名的 `wintun.dll` AMD64 版本。
 
-发布包中的 GUI 是 .NET 8 自包含单文件，不要求目标机器预装 .NET Desktop Runtime。
+发布包中的 GUI 是 .NET 10 自包含 Avalonia 单文件，不要求目标机器预装 .NET Desktop Runtime。
 
 ## 下载与便携运行
 
@@ -18,7 +18,7 @@ Windows 版本提供无需安装的 WPF 图形控制面板、命令行数据面�
 下载后先核对压缩包：
 
 ```powershell
-$archive = '.\tunscope-0.3.17-windows-amd64.zip'
+$archive = '.\tunscope-0.3.18-windows-amd64.zip'
 $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'TunScope package checksum mismatch' }
@@ -32,7 +32,7 @@ Expand-Archive $archive -DestinationPath .
 只有明确需要后台服务且目录内包含 `install.ps1` 时才运行安装脚本。Windows Service 必须从管理员保护的 `%ProgramFiles%` 目录加载，避免 LocalSystem 执行可被普通用户替换的程序或 DLL；在管理员 PowerShell 中执行：
 
 ```powershell
-Set-Location .\tunscope-0.3.17-windows-amd64
+Set-Location .\tunscope-0.3.18-windows-amd64
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AddToMachinePath
 ```
 
@@ -103,11 +103,11 @@ TunScope\
 
 ## 构建
 
-CLI 需要 Go 1.23.1+，GUI 构建需要 .NET 8 SDK。在仓库根目录执行：
+CLI 需要 Go 1.23.1+，GUI 构建需要 .NET 10 SDK。在仓库根目录执行：
 
 ```bash
-make windows-amd64 VERSION=0.3.17
-make windows-gui VERSION=0.3.17
+make windows-amd64 VERSION=0.3.18
+make windows-gui VERSION=0.3.18
 ```
 
 产物是 `bin/tunscope-windows-amd64.exe` 和 `bin/windows-gui/TunScope.exe`。前者复制到 Windows 后应重命名为 `tunscope-cli.exe`。也可以直接构建 CLI：
@@ -123,18 +123,18 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 
 ```powershell
 go build -trimpath -ldflags "-s -w" -o .\bin\tunscope-cli.exe .\cmd\tunscope
-dotnet publish .\windows\gui\TunScope.GUI.csproj `
+dotnet publish .\gui\TunScope.GUI.csproj `
   -c Release -r win-x64 --self-contained true `
-  -p:Version=0.3.17 -o .\bin\windows-gui
+  -p:Version=0.3.18 -o .\bin\windows-gui
 .\windows\package.ps1 `
   -Binary .\bin\tunscope-cli.exe `
   -GuiBinary .\bin\windows-gui\TunScope.exe `
   -Destination .\dist
 ```
 
-`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.17`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
+`package.ps1` 默认执行二进制的 `version` 命令取得包版本，也可显式传入 `-Version 0.3.18`。打包时会拒绝 CLI、GUI 和指定包版本不一致的产物；GUI 状态卡会显示自身构建版本。脚本还会重新下载并校验固定版本的官方 Wintun 归档，然后生成 ZIP 和 ZIP 的 SHA-256 文件。
 
-维护者推送形如 `v0.3.17` 或 `v0.3.17-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
+维护者推送形如 `v0.3.18` 或 `v0.3.18-rc.1` 的标签时，`release-windows.yml` 会在真实 Windows runner 上测试、注入标签版本、打包，并创建或更新 GitHub Release。标签版本不会依赖源码里的默认开发版本。
 
 ## 前台 CLI 快速开始
 
