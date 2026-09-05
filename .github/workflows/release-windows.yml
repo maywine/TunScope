@@ -1,20 +1,60 @@
-name: Release Windows
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish or complete
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Validate release tag
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo 'Release tag must look like v1.2.3 or v1.2.3-rc.1' >&2
+            exit 1
+          fi
+          printf 'tag=%s\nversion=%s\n' "$RELEASE_TAG" "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+      - name: Pin release source
+        id: source
+        shell: bash
+        run: printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: prepare
     runs-on: windows-2022
     env:
       CGO_ENABLED: '0'
+      TUNSCOPE_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
@@ -22,18 +62,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Validate release tag
-        shell: pwsh
-        run: |
-          $tagMatch = [regex]::Match(
-            $env:GITHUB_REF_NAME,
-            '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)$'
-          )
-          if (-not $tagMatch.Success) {
-            throw "Release tag must look like v0.3.18 or v0.3.18-rc.1: $env:GITHUB_REF_NAME"
-          }
-          $version = $tagMatch.Groups['version'].Value
-          "TUNSCOPE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: go test ./...
       - run: go vet ./...
       - name: Build versioned Windows binary
@@ -74,50 +102,124 @@ jobs:
             -Destination .\dist
       - uses: actions/upload-artifact@v4
         with:
-          name: tunscope-${{ github.ref_name }}-windows-amd64
+          name: tunscope-${{ needs.prepare.outputs.tag }}-windows-amd64
           path: |
             dist/*.zip
             dist/*.sha256
           if-no-files-found: error
-      - name: Create or update GitHub release
-        shell: pwsh
+
+  macos:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            rid: osx-arm64
+            arch: arm64
+            package_arch: arm64
+          - runner: macos-15-intel
+            rid: osx-x64
+            arch: x86_64
+            package_arch: amd64
+    runs-on: ${{ matrix.runner }}
+    env:
+      TUNSCOPE_VERSION: ${{ needs.prepare.outputs.version }}
+      TUNSCOPE_RID: ${{ matrix.rid }}
+      TUNSCOPE_ARCH: ${{ matrix.arch }}
+      TUNSCOPE_PACKAGE_ARCH: ${{ matrix.package_arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build and verify native macOS app
+        shell: bash
+        run: |
+          test "$(uname -m)" = "$TUNSCOPE_ARCH"
+          ./gui/package-macos.sh "$TUNSCOPE_VERSION" "$TUNSCOPE_RID" "$RUNNER_TEMP/tunscope-macos"
+          app_path="$RUNNER_TEMP/tunscope-macos/tunscope-$TUNSCOPE_VERSION-$TUNSCOPE_RID/TunScope.app"
+          app_version="$(/usr/libexec/PlistBuddy -c 'Print :TunScopeVersion' "$app_path/Contents/Info.plist")"
+          marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+          helper="$app_path/Contents/Resources/tunscope-helper"
+          test "$app_version" = "$TUNSCOPE_VERSION"
+          test "$marketing_version" = "${TUNSCOPE_VERSION%%-*}"
+          test "$("$helper" version)" = "tunscope $TUNSCOPE_VERSION"
+          test -x "$app_path/Contents/MacOS/TunScope"
+          test "$(lipo -archs "$helper")" = "$TUNSCOPE_ARCH"
+          test "$(lipo -archs "$app_path/Contents/MacOS/TunScope")" = "$TUNSCOPE_ARCH"
+          codesign --verify --deep --strict "$app_path"
+      - name: Archive app and verify extracted signature
+        shell: bash
+        run: |
+          app_path="$RUNNER_TEMP/tunscope-macos/tunscope-$TUNSCOPE_VERSION-$TUNSCOPE_RID/TunScope.app"
+          archive="tunscope-$TUNSCOPE_VERSION-macos-$TUNSCOPE_PACKAGE_ARCH.zip"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "dist/$archive"
+          ditto -x -k "dist/$archive" "$RUNNER_TEMP/tunscope-package-check"
+          extracted_app="$RUNNER_TEMP/tunscope-package-check/TunScope.app"
+          codesign --verify --deep --strict "$extracted_app"
+          test -x "$extracted_app/Contents/MacOS/TunScope"
+          test "$("$extracted_app/Contents/Resources/tunscope-helper" version)" = "tunscope $TUNSCOPE_VERSION"
+          cd dist
+          shasum -a 256 "$archive" > "$archive.sha256"
+          shasum -a 256 --check "$archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunscope-${{ needs.prepare.outputs.tag }}-macos-${{ matrix.package_arch }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tunscope-${{ needs.prepare.outputs.tag }}-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete release and publish
+        shell: bash
+        working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          TUNSCOPE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          $assets = @(Get-ChildItem -LiteralPath .\dist -File | ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 2) {
-            throw "Expected archive and checksum assets, found $($assets.Count)"
-          }
-
-          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            $uploadArguments = @(
-              'release',
-              'upload',
-              $env:GITHUB_REF_NAME
-            ) + $assets + @(
-              '--repo',
-              $env:GITHUB_REPOSITORY,
-              '--clobber'
-            )
-            & gh @uploadArguments
-            exit $LASTEXITCODE
-          }
-
-          $arguments = @(
-            'release',
-            'create',
-            $env:GITHUB_REF_NAME
-          ) + $assets + @(
-            '--repo',
-            $env:GITHUB_REPOSITORY,
-            '--title',
-            "TunScope $env:GITHUB_REF_NAME",
-            '--generate-notes',
-            '--verify-tag'
-          )
-          if ($env:TUNSCOPE_VERSION.Contains('-')) {
-            $arguments += '--prerelease'
-          }
-          & gh @arguments
-          exit $LASTEXITCODE
+          shopt -s nullglob dotglob
+          files=(*)
+          if (( ${#files[@]} != 6 )); then
+            echo "Expected three archives and three checksums, found ${#files[@]} files" >&2
+            exit 1
+          fi
+          assets=()
+          for platform in windows-amd64 macos-arm64 macos-amd64; do
+            archive="tunscope-$TUNSCOPE_VERSION-$platform.zip"
+            test -s "$archive"
+            test -s "$archive.sha256"
+            sha256sum --check "$archive.sha256"
+            unzip -tq "$archive"
+            assets+=("$archive" "$archive.sha256")
+          done
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            options=(--repo "$GITHUB_REPOSITORY" --title "TunScope $RELEASE_TAG" --generate-notes --verify-tag)
+            if [[ "$TUNSCOPE_VERSION" == *-* ]]; then
+              options+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" "${assets[@]}" "${options[@]}"
+          fi

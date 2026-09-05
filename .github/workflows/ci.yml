@@ -9,7 +9,11 @@ permissions:
 
 jobs:
   macos:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
