@@ -1,7 +1,9 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.Styling;
 using TunScope.GUI.Models;
 
 namespace TunScope.GUI;
@@ -23,6 +25,15 @@ public sealed partial class MainWindow : Window
         _controller = controller;
         DataContext = controller;
         InitializeComponent();
+        AdvancedSettings.TemplateApplied += (_, e) =>
+        {
+            // Fluent chooses a direction-specific header theme inside its
+            // template. A local theme keeps that choice from reintroducing
+            // keyframe rotation on mount and keyboard toggles.
+            if (e.NameScope.Find<ToggleButton>("ExpanderHeader") is { } header)
+                header.Theme = (ControlTheme)Resources["QuietExpanderHeader"]!;
+        };
+        ApplicationSectionsGrid.RowDefinitions = new RowDefinitions(controller.SupportsPackageFamilies ? "*,16,*" : "*,0,0");
         Title = $"TunScope {controller.VersionText}";
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += RefreshTimer_Tick;
@@ -46,7 +57,6 @@ public sealed partial class MainWindow : Window
         try
         {
             await _controller.RefreshStatusAsync();
-            LogTextBox.CaretIndex = LogTextBox.Text?.Length ?? 0;
         }
         catch (Exception ex)
         {
@@ -112,8 +122,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var message = await _controller.TestProxyAsync();
-            await MessageDialog.ShowAsync(this, "代理测试完成", message, MessageDialogButtons.Ok);
+            await _controller.TestProxyAsync();
         }
         catch (Exception ex)
         {
@@ -126,14 +135,14 @@ public sealed partial class MainWindow : Window
         await RunOperationAsync(() => _controller.SaveAsync());
     }
 
-    private async void StartButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void PrimaryActionButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunOperationAsync(() => _controller.StartAsync());
+        await RunOperationAsync(() => _controller.CanRestart ? _controller.RestartAsync() : _controller.StartAsync());
     }
 
-    private async void RestartButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void ManageApplicationsButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunOperationAsync(() => _controller.RestartAsync());
+        MainTabs.SelectedIndex = 1;
     }
 
     private async void StopButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -248,7 +257,6 @@ public sealed partial class MainWindow : Window
         try
         {
             await operation();
-            LogTextBox.CaretIndex = LogTextBox.Text?.Length ?? 0;
         }
         catch (OperationCanceledException ex)
         {

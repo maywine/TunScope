@@ -11,6 +11,7 @@
           <SolidColorBrush x:Key="CardBorderBrush" Color="#DDE2EA" />
           <SolidColorBrush x:Key="TextPrimaryBrush" Color="#172033" />
           <SolidColorBrush x:Key="TextSecondaryBrush" Color="#596579" />
+          <SolidColorBrush x:Key="ErrorTextBrush" Color="#B42318" />
           <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FFFFFF" />
           <SolidColorBrush x:Key="ControlDisabledBrush" Color="#EEF1F5" />
           <SolidColorBrush x:Key="ControlBorderBrush" Color="#AEB8C7" />
@@ -31,6 +32,7 @@
           <SolidColorBrush x:Key="CardBorderBrush" Color="#344054" />
           <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F2F4F7" />
           <SolidColorBrush x:Key="TextSecondaryBrush" Color="#AAB4C3" />
+          <SolidColorBrush x:Key="ErrorTextBrush" Color="#FDA29B" />
           <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#202734" />
           <SolidColorBrush x:Key="ControlDisabledBrush" Color="#242B36" />
           <SolidColorBrush x:Key="ControlBorderBrush" Color="#526071" />
@@ -50,5 +52,9 @@
   </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <!-- Path hints are frequently inspected in succession; show them directly. -->
+    <Style Selector="ToolTip">
+      <Setter Property="Transitions"><Transitions /></Setter>
+    </Style>
   </Application.Styles>
 </Application>

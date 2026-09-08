@@ -2,10 +2,10 @@ BINARY := bin/tunscope
 WINDOWS_BINARY := bin/tunscope-windows-amd64.exe
 WINDOWS_GUI_DIR := bin/windows-gui
 MACOS_RID ?= $(if $(filter arm64,$(shell uname -m)),osx-arm64,osx-x64)
-VERSION ?= 0.3.19
+VERSION ?= 0.3.20
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build macos-gui windows-amd64 windows-gui test clean install uninstall
+.PHONY: all build macos-gui windows-amd64 windows-gui test gui-test clean install uninstall
 
 all: build
 
@@ -25,6 +25,9 @@ windows-gui:
 
 test:
 	go test ./...
+
+gui-test:
+	dotnet run --project gui.tests/TunScope.GUI.Tests.csproj -c Release
 
 clean:
 	rm -f $(BINARY) $(WINDOWS_BINARY)

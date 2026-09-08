@@ -249,7 +249,9 @@ internal sealed class MacPlatformService : IPlatformService
             const int maximumBytes = 128 * 1024;
             stream.Seek(Math.Max(0, stream.Length - maximumBytes), SeekOrigin.Begin);
             using var reader = new StreamReader(stream, Encoding.UTF8, true);
-            return reader.ReadToEnd();
+            if (stream.Length > maximumBytes) reader.ReadLine(); // Skip a partial first record.
+            return string.Join(Environment.NewLine, reader.ReadToEnd().Split('\n')
+                .Select(line => PortableLogFormatter.Format(line.TrimEnd('\r'), false)));
         }
         catch (Exception ex)
         {

@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Avalonia.Media;
 using Avalonia.Threading;
 using TunScope.GUI.Models;
@@ -13,6 +14,14 @@ namespace TunScope.GUI;
 public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
 {
     private readonly IPlatformService _platform;
+    private readonly bool _persistThemePreference;
+    private string? _savedConfiguration;
+    private string? _appliedConfiguration;
+    private int _appliedOwnerPid;
+    private bool _configurationLoaded;
+    private bool _followLogs = true;
+    private string _proxyTestResult = string.Empty;
+    private bool _proxyTestFailed;
     private GuiStatus? _lastStatus;
     private bool _isBusy;
     private string _proxyUrl = string.Empty;
@@ -35,11 +44,12 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
     private string _operationText = string.Empty;
     private string _logText = string.Empty;
 
-    public GuiController(IPlatformService platform)
+    public GuiController(IPlatformService platform, bool persistThemePreference = true)
     {
         _platform = platform;
-        _themeMode = ThemePreferenceStore.Load();
-        ThemePreferenceStore.ApplyAndSave(_themeMode);
+        _persistThemePreference = persistThemePreference;
+        _themeMode = persistThemePreference ? ThemePreferenceStore.Load() : ThemePreferenceStore.SystemTheme;
+        if (persistThemePreference) ThemePreferenceStore.ApplyAndSave(_themeMode);
         Applications.CollectionChanged += CollectionChanged;
         PackageFamilies.CollectionChanged += CollectionChanged;
         BypassTargets.CollectionChanged += CollectionChanged;
@@ -61,22 +71,87 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
     public string ApplicationModeHint => SupportsGlobalMode
         ? "命中的应用及其子进程走 SOCKS5；两个列表都为空时是全局模式。"
         : "添加的应用及其辅助进程走 SOCKS5，其他应用保持直连。";
-    public string ApplicationPickerLabel => OperatingSystem.IsMacOS() ? "添加 .app" : "添加 .exe";
+    public string ApplicationPickerLabel => "添加应用";
     public string LifecycleHint => _platform.StopsRuntimeOnGuiClose
-        ? "GUI 直接管理前台数据面。关闭 GUI 时会先安全停止 TUN 并恢复路由。"
-        : "启动与停止时 macOS 会请求管理员授权；关闭 GUI 不会自动停止已启动的 TUN。";
+        ? "关闭窗口时会停止连接，并恢复系统网络。"
+        : "关闭窗口后连接仍会保持。启动与停止连接时，需要管理员授权。";
+    public string ApplicationSummary => Applications.Count + PackageFamilies.Count == 0
+        ? SupportsGlobalMode ? "全局模式 · 所有应用通过代理联网" : "尚未选择应用"
+        : $"已选择 {Applications.Count + PackageFamilies.Count} 个应用目标 · 包含子进程";
+    public bool HasApplications => Applications.Count > 0;
+    public bool HasPackageFamilies => PackageFamilies.Count > 0;
+    public bool HasBypassTargets => BypassTargets.Count > 0;
+    public bool HasUnsavedChanges => _configurationLoaded &&
+        (_lastStatus?.ConfigReady != true || CaptureConfiguration() != _savedConfiguration);
+    public bool HasPendingConfiguration => IsRuntimeRunning &&
+        (_appliedConfiguration is null || _savedConfiguration != _appliedConfiguration);
+    public string ConfigurationStateText => !_configurationLoaded ? "正在读取配置…"
+        : HasUnsavedChanges ? "有未保存的更改"
+        : IsRuntimeRunning && _appliedConfiguration is null ? "配置已保存 · 重新连接后可确认生效"
+        : HasPendingConfiguration ? "已保存，重新连接后生效"
+        : IsRuntimeRunning ? "当前配置已生效" : "配置已保存 · 下次连接时生效";
+    public string PrimaryActionLabel => !IsRuntimeRunning ? "启动连接"
+        : HasUnsavedChanges ? "保存并重启"
+        : HasPendingConfiguration && _appliedConfiguration is not null ? "应用并重启" : "重新连接";
+    public bool CanPrimaryAction => IsRuntimeRunning ? CanRestart : CanStart;
+    public string ProxyValidationMessage => IsValidProxy ? string.Empty
+        : "请输入完整的 SOCKS5 地址，例如 socks5://127.0.0.1:7890。";
+    public string MtuValidationMessage => int.TryParse(MtuText.Trim(), out var mtu) && mtu is >= 1280 and <= 9000
+        ? string.Empty : "MTU 必须是 1280 到 9000 之间的整数。";
+    public string ApplicationValidationMessage => !SupportsGlobalMode && !HasApplications
+        ? "请先添加至少一个需要代理的应用。"
+        : TcpOnly && !HasApplications && !HasPackageFamilies ? "TCP-only 模式需要至少一个应用目标。" : string.Empty;
+    public bool HasProxyError => ProxyValidationMessage.Length > 0;
+    public bool HasMtuError => MtuValidationMessage.Length > 0;
+    public string DeviceValidationMessage => ConfigurationValidation.Device(Device, SupportsPackageFamilies);
+    public string GatewayValidationMessage => ConfigurationValidation.Gateway(Gateway4, SupportsPackageFamilies);
+    public string DnsValidationMessage => ConfigurationValidation.TrustedDns(TrustedDns);
+    public bool HasDeviceError => DeviceValidationMessage.Length > 0;
+    public bool HasGatewayError => GatewayValidationMessage.Length > 0;
+    public bool HasDnsError => DnsValidationMessage.Length > 0;
+    public bool HasNetworkError => HasMtuError || HasDeviceError || HasGatewayError || HasDnsError;
+    public bool HasApplicationError => ApplicationValidationMessage.Length > 0;
+    public string ActionHint => HasLegacyService ? "请先移除旧服务，再启动连接。"
+        : HasProxyError ? "请检查代理地址。"
+        : HasApplicationError ? ApplicationValidationMessage
+        : HasMtuError ? "请在高级网络设置中修正 MTU。"
+        : HasNetworkError ? "请检查高级网络设置中的设备名称、网关或 DNS。"
+        : HasUnsavedChanges && IsRuntimeRunning ? "当前连接仍使用原配置；保存并重启后应用更改。"
+        : HasUnsavedChanges ? "启动连接时会自动保存配置。" : string.Empty;
+    public bool HasActionHint => ActionHint.Length > 0;
+    public string DiagnosticsDetail { get; private set; } = string.Empty;
+    public string ProxyTestResult { get => _proxyTestResult; private set => SetField(ref _proxyTestResult, value); }
+    public bool ProxyTestFailed { get => _proxyTestFailed; private set => SetField(ref _proxyTestFailed, value); }
+    public bool HasProxyTestResult => ProxyTestResult.Length > 0;
+    public bool FollowLogs
+    {
+        get => _followLogs;
+        set
+        {
+            if (!SetField(ref _followLogs, value)) return;
+            OnPropertyChanged(nameof(LogFollowHint));
+            if (value) RefreshLog();
+        }
+    }
+    public string LogFollowHint => FollowLogs ? "实时更新 · 向上滚动可暂停" : "已暂停更新 · 可回看、选择和复制日志";
 
     public string ProxyUrl
     {
         get => _proxyUrl;
-        set { if (SetField(ref _proxyUrl, value)) NotifyComputedState(); }
+        set
+        {
+            if (!SetField(ref _proxyUrl, value)) return;
+            ProxyTestResult = string.Empty;
+            OnPropertyChanged(nameof(HasProxyTestResult));
+            ConfigurationChanged();
+        }
     }
-    public string Device { get => _device; set => SetField(ref _device, value); }
-    public string InterfaceName { get => _interfaceName; set => SetField(ref _interfaceName, value); }
-    public string Gateway4 { get => _gateway4; set => SetField(ref _gateway4, value); }
-    public string TrustedDns { get => _trustedDns; set => SetField(ref _trustedDns, value); }
-    public string MtuText { get => _mtuText; set => SetField(ref _mtuText, value); }
-    public string LogLevel { get => _logLevel; set => SetField(ref _logLevel, value); }
+    public string Device { get => _device; set => SetConfigurationField(ref _device, value); }
+    public string InterfaceName { get => _interfaceName; set => SetConfigurationField(ref _interfaceName, value); }
+    public string Gateway4 { get => _gateway4; set => SetConfigurationField(ref _gateway4, value); }
+    public string TrustedDns { get => _trustedDns; set => SetConfigurationField(ref _trustedDns, value); }
+    public string MtuText { get => _mtuText; set => SetConfigurationField(ref _mtuText, value); }
+    public string LogLevel { get => _logLevel; set => SetConfigurationField(ref _logLevel, value); }
     public string BypassInput { get => _bypassInput; set => SetField(ref _bypassInput, value); }
     public string PackageFamilyInput { get => _packageFamilyInput; set => SetField(ref _packageFamilyInput, value); }
     public string ThemeMode
@@ -86,18 +161,14 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         {
             if (SetField(ref _themeMode, value))
             {
-                ThemePreferenceStore.ApplyAndSave(value);
+                if (_persistThemePreference) ThemePreferenceStore.ApplyAndSave(value);
             }
         }
     }
-    public bool AutoBypass { get => _autoBypass; set => SetField(ref _autoBypass, value); }
-    public bool Ipv6 { get => _ipv6; set => SetField(ref _ipv6, value); }
-    public bool TcpOnly
-    {
-        get => _tcpOnly;
-        set { if (SetField(ref _tcpOnly, value)) NotifyComputedState(); }
-    }
-    public bool IcmpDirect { get => _icmpDirect; set => SetField(ref _icmpDirect, value); }
+    public bool AutoBypass { get => _autoBypass; set => SetConfigurationField(ref _autoBypass, value); }
+    public bool Ipv6 { get => _ipv6; set => SetConfigurationField(ref _ipv6, value); }
+    public bool TcpOnly { get => _tcpOnly; set => SetConfigurationField(ref _tcpOnly, value); }
+    public bool IcmpDirect { get => _icmpDirect; set => SetConfigurationField(ref _icmpDirect, value); }
     public bool IsBusy
     {
         get => _isBusy;
@@ -109,22 +180,23 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
     public string OperationText { get => _operationText; private set => SetField(ref _operationText, value); }
     public string LogText { get => _logText; private set => SetField(ref _logText, value); }
 
-    public bool CanEditConfiguration => !IsBusy && _platform.IsOperatingSystemSupported;
-    public bool CanSave => CanEditConfiguration;
+    public bool CanEditConfiguration => _configurationLoaded && !IsBusy && _platform.IsOperatingSystemSupported;
+    public bool CanSave => CanEditConfiguration && HasUnsavedChanges && !HasProxyError && !HasNetworkError && !HasApplicationError;
     public bool CanStart => CanEditConfiguration &&
                             _lastStatus?.LegacyServiceInstalled != true &&
                             !IsRuntimeRunning &&
-                            IsValidProxy &&
+                            IsValidProxy && !HasNetworkError &&
                             (SupportsGlobalMode || Applications.Count > 0) &&
                             (!TcpOnly || Applications.Count + PackageFamilies.Count > 0);
-    public bool CanRestart => CanEditConfiguration && _lastStatus?.LegacyServiceInstalled != true && IsRuntimeRunning;
+    public bool CanRestart => CanEditConfiguration && _lastStatus?.LegacyServiceInstalled != true && IsRuntimeRunning &&
+                              !HasProxyError && !HasNetworkError && !HasApplicationError;
     public bool CanStop => !IsBusy && _lastStatus?.LegacyServiceInstalled != true &&
                            _lastStatus?.Runtime is "active" or "stale" or "starting" or "waiting-network";
+    public bool ShowStopAction => _lastStatus?.Runtime is "active" or "stale" or "starting" or "waiting-network" or "stopping";
     public bool CanRemoveLegacyService => !IsBusy &&
                                           _platform.SupportsLegacyServiceMigration &&
                                           _lastStatus?.LegacyServiceInstalled == true;
     public bool HasLegacyService => _lastStatus?.LegacyServiceInstalled == true;
-    public bool ShowProgress => IsBusy;
 
     private bool IsRuntimeRunning => _lastStatus?.Runtime is "active" or "starting" or "waiting-network";
 
@@ -142,10 +214,14 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         try
         {
             await ApplyConfigurationAsync(await _platform.LoadConfigurationAsync(cancellationToken), cancellationToken);
+            _savedConfiguration = CaptureConfiguration();
+            _configurationLoaded = true;
             await RefreshStatusAsync(cancellationToken);
         }
         catch (Exception ex)
         {
+            // Keep recovery possible if the saved file cannot be loaded.
+            _configurationLoaded = true;
             StatusTitle = "初始化失败";
             StatusDetail = ex.Message;
             StatusBrush = Brush("#F04438");
@@ -156,6 +232,13 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
     public async Task RefreshStatusAsync(CancellationToken cancellationToken = default)
     {
         _lastStatus = await _platform.QueryStatusAsync(cancellationToken);
+        // The helper can outlive this window or be restarted elsewhere. Never
+        // claim that an on-disk configuration is the configuration it is using.
+        if (!IsRuntimeRunning || (_appliedOwnerPid > 0 && _lastStatus.OwnerPid != _appliedOwnerPid))
+        {
+            _appliedConfiguration = null;
+            _appliedOwnerPid = 0;
+        }
         UpdateStatusDisplay(_lastStatus);
         RefreshLog();
         NotifyComputedState();
@@ -170,18 +253,34 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
 
     public async Task<string> TestProxyAsync(CancellationToken cancellationToken = default)
     {
-        EnsureValidProxy();
-        return await WithBusyStateAsync(
-            "正在测试 SOCKS5…",
-            () => _platform.TestProxyAsync(ProxyUrl.Trim(), cancellationToken));
+        ProxyTestResult = string.Empty;
+        ProxyTestFailed = false;
+        OnPropertyChanged(nameof(HasProxyTestResult));
+        try
+        {
+            EnsureValidProxy();
+            ProxyTestResult = await WithBusyStateAsync(
+                "正在测试 SOCKS5…",
+                () => _platform.TestProxyAsync(ProxyUrl.Trim(), cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            ProxyTestFailed = true;
+            ProxyTestResult = ex.Message;
+        }
+        OnPropertyChanged(nameof(HasProxyTestResult));
+        return ProxyTestResult;
     }
 
     public async Task SaveAsync(CancellationToken cancellationToken = default)
     {
         await WithBusyStateAsync("正在保存配置…", async () =>
         {
-            await _platform.SaveConfigurationAsync(BuildConfiguration(), cancellationToken);
-            OperationText = "配置已安全保存；运行中的 TUN 需重启后生效";
+            var configuration = BuildConfiguration();
+            var snapshot = CaptureConfiguration();
+            await _platform.SaveConfigurationAsync(configuration, cancellationToken);
+            _savedConfiguration = snapshot;
+            OperationText = "配置已保存";
             await RefreshStatusAsync(cancellationToken);
         });
     }
@@ -191,11 +290,14 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         await WithBusyStateAsync("正在启动 TUN…", async () =>
         {
             var configuration = BuildConfiguration();
+            var snapshot = CaptureConfiguration();
             await _platform.SaveConfigurationAsync(configuration, cancellationToken);
+            _savedConfiguration = snapshot;
             _lastStatus = new GuiStatus("starting", ConfigReady: true);
             UpdateStatusDisplay(_lastStatus);
             await _platform.StartAsync(configuration, cancellationToken);
             await WaitForStartedStateAsync(cancellationToken);
+            MarkConfigurationApplied(snapshot);
             OperationText = "TUN 已启动";
         });
     }
@@ -204,11 +306,17 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
     {
         await WithBusyStateAsync("正在保存配置并重启…", async () =>
         {
-            await _platform.StopAsync(cancellationToken);
+            // Validate and persist before stopping. Windows also performs its
+            // platform validation during SaveConfigurationAsync; a failed save
+            // must leave the existing connection untouched on both platforms.
             var configuration = BuildConfiguration();
+            var snapshot = CaptureConfiguration();
             await _platform.SaveConfigurationAsync(configuration, cancellationToken);
+            _savedConfiguration = snapshot;
+            await _platform.StopAsync(cancellationToken);
             await _platform.StartAsync(configuration, cancellationToken);
             await WaitForStartedStateAsync(cancellationToken);
+            MarkConfigurationApplied(snapshot);
             OperationText = "配置已生效，TUN 已重新启动";
         });
     }
@@ -409,6 +517,12 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         {
             throw new InvalidDataException("TCP-only 兼容模式至少需要一个应用目标");
         }
+        var networkError = new[] { DeviceValidationMessage, GatewayValidationMessage, DnsValidationMessage }
+            .FirstOrDefault(message => message.Length > 0);
+        if (networkError is not null) throw new InvalidDataException(networkError);
+        if (!LogLevels.Contains(LogLevel)) throw new InvalidDataException("请选择有效的日志级别。");
+        if (Applications.Count + PackageFamilies.Count > 128) throw new InvalidDataException("最多可以选择 128 个应用目标。");
+        if (PackageFamilies.Any(value => !IsValidPackageFamilyName(value))) throw new InvalidDataException("请检查 Microsoft Store 应用的 PackageFamilyName。");
 
         return new TunScopeConfig
         {
@@ -427,6 +541,34 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
             TcpOnly = TcpOnly,
             IcmpDirect = IcmpDirect
         };
+    }
+
+    private string CaptureConfiguration() => JsonSerializer.Serialize(new
+    {
+        Proxy = ProxyUrl.Trim(), Device = Device.Trim(), Interface = InterfaceName.Trim(),
+        Gateway = Gateway4.Trim(), Dns = TrustedDns.Trim(), Mtu = MtuText.Trim(), LogLevel,
+        AutoBypass, Ipv6, TcpOnly, IcmpDirect,
+        Applications = Applications.Select(application => application.ApplicationPath).Order(StringComparer.Ordinal).ToArray(),
+        PackageFamilies = SupportsPackageFamilies ? PackageFamilies.Order(StringComparer.Ordinal).ToArray() : [],
+        Bypass = BypassTargets.Order(StringComparer.Ordinal).ToArray()
+    });
+
+    private void MarkConfigurationApplied(string snapshot)
+    {
+        _appliedConfiguration = snapshot;
+        _appliedOwnerPid = _lastStatus?.OwnerPid ?? 0;
+        NotifyComputedState();
+    }
+
+    private void SetConfigurationField<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        if (SetField(ref field, value, name)) ConfigurationChanged();
+    }
+
+    private void ConfigurationChanged()
+    {
+        if (_configurationLoaded) OperationText = string.Empty;
+        NotifyComputedState();
     }
 
     private async Task WaitForStartedStateAsync(CancellationToken cancellationToken)
@@ -456,12 +598,12 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         }
         else if (status.RoutesSuspended || status.Runtime == "waiting-network")
         {
-            StatusTitle = "TUN：等待网络恢复";
+            StatusTitle = "等待网络恢复";
             StatusBrush = Brush("#F79009");
         }
         else
         {
-            StatusTitle = $"TUN：{TranslateRuntime(status.Runtime)}";
+            StatusTitle = TranslateRuntime(status.Runtime);
             StatusBrush = status.Runtime switch
             {
                 "active" => Brush("#12B76A"),
@@ -501,7 +643,14 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         {
             details.Add($"配置错误：{status.ConfigError}");
         }
-        StatusDetail = string.Join(" · ", details);
+        DiagnosticsDetail = string.Join(" · ", details);
+        OnPropertyChanged(nameof(DiagnosticsDetail));
+        StatusDetail = status.LegacyServiceInstalled ? "移除旧服务后，即可使用当前版本连接。"
+            : status.RoutesSuspended || status.Runtime == "waiting-network" ? "当前使用系统网络，网络恢复后将自动重新连接。"
+            : status.Runtime == "active" ? "更改配置后，重新连接即可应用。"
+            : status.Runtime == "stale" ? "请停止连接，清理后重新启动。"
+            : status.Runtime == "starting" ? "正在建立代理连接…"
+            : "选择代理和应用，即可启动连接。";
     }
 
     private async Task WithBusyStateAsync(string progress, Func<Task> operation)
@@ -515,6 +664,12 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         try
         {
             await operation();
+        }
+        catch
+        {
+            OperationText = "操作未完成";
+            try { await RefreshStatusAsync(); } catch { /* Preserve the original operation error. */ }
+            throw;
         }
         finally
         {
@@ -600,12 +755,14 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
 
     private void RefreshLog()
     {
-        LogText = _platform.ReadLog(_lastStatus);
+        // Freeze the displayed buffer while reading history. Updating a whole
+        // TextBox buffer would otherwise reset selection and shift old lines.
+        if (FollowLogs) LogText = _platform.ReadLog(_lastStatus);
     }
 
     private void CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        NotifyComputedState();
+        ConfigurationChanged();
     }
 
     private void NotifyComputedState()
@@ -615,9 +772,33 @@ public sealed class GuiController : INotifyPropertyChanged, IAsyncDisposable
         OnPropertyChanged(nameof(CanStart));
         OnPropertyChanged(nameof(CanRestart));
         OnPropertyChanged(nameof(CanStop));
+        OnPropertyChanged(nameof(ShowStopAction));
         OnPropertyChanged(nameof(CanRemoveLegacyService));
         OnPropertyChanged(nameof(HasLegacyService));
-        OnPropertyChanged(nameof(ShowProgress));
+        OnPropertyChanged(nameof(CanPrimaryAction));
+        OnPropertyChanged(nameof(PrimaryActionLabel));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+        OnPropertyChanged(nameof(HasPendingConfiguration));
+        OnPropertyChanged(nameof(ConfigurationStateText));
+        OnPropertyChanged(nameof(ApplicationSummary));
+        OnPropertyChanged(nameof(HasApplications));
+        OnPropertyChanged(nameof(HasPackageFamilies));
+        OnPropertyChanged(nameof(HasBypassTargets));
+        OnPropertyChanged(nameof(ProxyValidationMessage));
+        OnPropertyChanged(nameof(MtuValidationMessage));
+        OnPropertyChanged(nameof(ApplicationValidationMessage));
+        OnPropertyChanged(nameof(HasProxyError));
+        OnPropertyChanged(nameof(HasMtuError));
+        OnPropertyChanged(nameof(DeviceValidationMessage));
+        OnPropertyChanged(nameof(GatewayValidationMessage));
+        OnPropertyChanged(nameof(DnsValidationMessage));
+        OnPropertyChanged(nameof(HasDeviceError));
+        OnPropertyChanged(nameof(HasGatewayError));
+        OnPropertyChanged(nameof(HasDnsError));
+        OnPropertyChanged(nameof(HasNetworkError));
+        OnPropertyChanged(nameof(HasApplicationError));
+        OnPropertyChanged(nameof(ActionHint));
+        OnPropertyChanged(nameof(HasActionHint));
     }
 
     private static string TranslateRuntime(string runtime) => runtime switch

@@ -2,274 +2,388 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:TunScope.GUI"
         xmlns:models="using:TunScope.GUI.Models"
+        xmlns:controls="using:TunScope.GUI.Controls"
         x:Class="TunScope.GUI.MainWindow"
         x:DataType="local:GuiController"
-        Title="TunScope"
-        Width="1020" Height="790"
-        MinWidth="880" MinHeight="680"
-        WindowStartupLocation="CenterScreen"
-        Icon="/Assets/TunScopeIcon.png"
-        Background="{DynamicResource AppBackgroundBrush}"
-        FontFamily="PingFang SC, Microsoft YaHei UI, sans-serif">
+        Title="TunScope" Width="1000" Height="800" MinWidth="860" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Icon="/Assets/TunScopeIcon.png"
+        Background="{DynamicResource AppBackgroundBrush}" FontSize="14">
+  <Window.Resources>
+    <!-- A static disclosure glyph also responds immediately to keyboard input
+         and avoids depending on OS-specific reduced-motion APIs. -->
+    <ControlTheme x:Key="QuietExpanderHeader" TargetType="ToggleButton">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border x:Name="HeaderBorder" Background="{TemplateBinding Background}"
+                  BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                  CornerRadius="{TemplateBinding CornerRadius}" Padding="16,12">
+            <Grid ColumnDefinitions="*,16,Auto">
+              <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center" />
+              <Path x:Name="DisclosureGlyph" Grid.Column="2" Data="M0,0 L4,4 L8,0" Stretch="None"
+                    Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" VerticalAlignment="Center" />
+            </Grid>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:checked /template/ Path#DisclosureGlyph">
+        <Setter Property="Data" Value="M0,4 L4,0 L8,4" />
+      </Style>
+      <Style Selector="^:pointerover /template/ Border#HeaderBorder">
+        <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" />
+      </Style>
+      <Style Selector="^:pressed /template/ Border#HeaderBorder">
+        <Setter Property="Background" Value="{DynamicResource ControlDisabledBrush}" />
+      </Style>
+      <Style Selector="^:focus-visible /template/ Border#HeaderBorder">
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemControlHighlightAccentBrush}" />
+      </Style>
+    </ControlTheme>
+  </Window.Resources>
   <Window.Styles>
     <Style Selector="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
     <Style Selector="Button">
-      <Setter Property="Padding" Value="15,8" />
-      <Setter Property="Margin" Value="0,0,8,0" />
-      <Setter Property="MinWidth" Value="88" />
+      <Setter Property="Padding" Value="16,9" />
+      <Setter Property="MinHeight" Value="36" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="Button:not(.accent)">
       <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
       <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-      <Setter Property="BorderThickness" Value="1" />
     </Style>
-    <Style Selector="Button:pointerover /template/ ContentPresenter">
+    <Style Selector="Button:not(.accent):pointerover /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" />
     </Style>
-    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#0B63CE" />
-      <Setter Property="Foreground" Value="White" />
-    </Style>
-    <Style Selector="Button:disabled">
-      <Setter Property="Opacity" Value="0.48" />
-    </Style>
-    <Style Selector="TextBox">
-      <Setter Property="Padding" Value="8,6" />
-      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-      <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-      <Setter Property="BorderThickness" Value="1" />
-    </Style>
-    <Style Selector="TextBox:focus">
-      <Setter Property="BorderBrush" Value="#1677FF" />
-      <Setter Property="BorderThickness" Value="2" />
-    </Style>
-    <Style Selector="TextBox:disabled">
-      <Setter Property="Opacity" Value="0.58" />
+    <Style Selector="Button:not(.accent):pressed /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource ControlDisabledBrush}" />
     </Style>
-    <Style Selector="ComboBox">
+    <Style Selector="Button:not(.accent):disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+      <Setter Property="Opacity" Value="0.45" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Padding" Value="10,8" />
       <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
       <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="TextBox.invalid">
+      <Setter Property="BorderBrush" Value="{DynamicResource ErrorTextBrush}" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="MinHeight" Value="36" />
     </Style>
     <Style Selector="CheckBox">
       <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
-    <Style Selector="CheckBox:disabled">
-      <Setter Property="Opacity" Value="0.52" />
-    </Style>
-    <Style Selector="TabControl">
-      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
-    </Style>
     <Style Selector="TabItem">
-      <Setter Property="Foreground" Value="{DynamicResource TabForegroundBrush}" />
-      <Setter Property="Background" Value="{DynamicResource TabBackgroundBrush}" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Padding" Value="18,13" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
     <Style Selector="TabItem:selected">
-      <Setter Property="Foreground" Value="{DynamicResource TabSelectedForegroundBrush}" />
-      <Setter Property="Background" Value="{DynamicResource TabSelectedBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="ListBox">
-      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
       <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
     </Style>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="8" />
-      <Setter Property="Padding" Value="16" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="20" />
     </Style>
-    <Style Selector="TextBlock.field-label">
-      <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="Margin" Value="0,0,14,0" />
-      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Style Selector="TextBlock.section-title">
+      <Setter Property="FontSize" Value="16" />
+      <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="TextBlock.hint">
       <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontSize" Value="13" />
       <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.error">
+      <Setter Property="Foreground" Value="{DynamicResource ErrorTextBrush}" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Expander">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton">
+      <Setter Property="Background" Value="{DynamicResource InfoBackgroundBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
   </Window.Styles>
 
-  <Grid Margin="20" RowDefinitions="Auto,12,*,14,Auto">
-    <Border Grid.Row="0" Classes="card">
-      <Grid ColumnDefinitions="Auto,12,*,Auto">
-        <Border Width="12" Height="44" CornerRadius="6" Background="{Binding StatusBrush}" />
-        <StackPanel Grid.Column="2" Spacing="4">
-          <TextBlock Text="{Binding StatusTitle}" FontSize="18" FontWeight="SemiBold" />
-          <TextBlock Text="{Binding StatusDetail}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+  <Grid Margin="20" RowDefinitions="Auto,16,*,12,Auto">
+    <Border Classes="card">
+      <Grid ColumnDefinitions="*,20,Auto">
+        <Grid ColumnDefinitions="10,14,*" VerticalAlignment="Center">
+          <Border Width="10" Height="10" CornerRadius="5" Background="{Binding StatusBrush}"
+                  VerticalAlignment="Top" Margin="0,9,0,0" />
+          <StackPanel Grid.Column="2" Spacing="5">
+            <TextBlock Text="{Binding StatusTitle}" FontSize="22" FontWeight="SemiBold"
+                       AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="{Binding StatusDetail}" Classes="hint" />
+          </StackPanel>
+        </Grid>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Button x:Name="PrimaryActionButton" Classes="accent" Content="{Binding PrimaryActionLabel}"
+                  Click="PrimaryActionButton_Click" IsEnabled="{Binding CanPrimaryAction}" />
+          <Button Content="停止连接" Click="StopButton_Click" IsVisible="{Binding ShowStopAction}"
+                  IsEnabled="{Binding CanStop}" />
         </StackPanel>
-        <Button Grid.Column="3" Content="刷新" Click="RefreshButton_Click" IsEnabled="{Binding !IsBusy}" Margin="8,0,0,0" />
       </Grid>
     </Border>
 
-    <TabControl Grid.Row="2" Background="{DynamicResource CardBackgroundBrush}">
-      <TabItem Header="代理与网络">
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Grid Margin="22"
-                ColumnDefinitions="145,*,18,145,*"
-                RowDefinitions="Auto,14,Auto,14,Auto,14,Auto,14,Auto,14,Auto,14,Auto,18,Auto">
-            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field-label" Text="SOCKS5 代理" />
-            <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
-                     Text="{Binding ProxyUrl, Mode=TwoWay}"
-                     PlaceholderText="socks5://127.0.0.1:7890"
-                     IsEnabled="{Binding CanEditConfiguration}" />
-            <Button Grid.Row="0" Grid.Column="4" Content="测试代理" Click="TestProxyButton_Click"
-                    IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
+    <Border Grid.Row="2" Classes="card" Padding="8,0">
+      <TabControl x:Name="MainTabs">
+        <TabItem Header="连接">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="16,20" Spacing="22">
+              <StackPanel Spacing="8">
+                <TextBlock Text="代理地址" Classes="section-title" />
+                <Grid ColumnDefinitions="*,10,Auto">
+                  <TextBox x:Name="ProxyTextBox" Text="{Binding ProxyUrl, Mode=TwoWay}"
+                           PlaceholderText="socks5://127.0.0.1:7890" AutomationProperties.Name="SOCKS5 代理地址"
+                           AutomationProperties.HelpText="{Binding ProxyValidationMessage}"
+                           Classes.invalid="{Binding HasProxyError}" IsEnabled="{Binding CanEditConfiguration}" />
+                  <Button Grid.Column="2" Content="测试代理" Click="TestProxyButton_Click"
+                          IsEnabled="{Binding CanEditConfiguration}" />
+                </Grid>
+                <TextBlock Text="{Binding ProxyValidationMessage}" Classes="error" IsVisible="{Binding HasProxyError}" />
+                <TextBlock Text="{Binding ProxyTestResult}" Classes="hint" Classes.error="{Binding ProxyTestFailed}"
+                           IsVisible="{Binding HasProxyTestResult}" AutomationProperties.LiveSetting="Polite" />
+              </StackPanel>
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Classes="field-label" Text="可信 DNS（可选）" />
-            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding TrustedDns, Mode=TwoWay}"
-                     PlaceholderText="留空使用系统 DNS" IsEnabled="{Binding CanEditConfiguration}" />
-            <TextBlock Grid.Row="2" Grid.Column="3" Classes="field-label" Text="TUN 设备名称" />
-            <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Device, Mode=TwoWay}"
-                     IsEnabled="{Binding CanEditConfiguration}" />
+              <Border Background="{DynamicResource InfoBackgroundBrush}" CornerRadius="8" Padding="16">
+                <Grid ColumnDefinitions="*,16,Auto">
+                  <StackPanel Spacing="5" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ApplicationSummary}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Classes="hint" Text="{Binding ApplicationModeHint}" />
+                  </StackPanel>
+                  <Button Grid.Column="2" Content="选择应用" Click="ManageApplicationsButton_Click" VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+              <TextBlock Text="{Binding ActionHint}" Classes="hint" IsVisible="{Binding HasActionHint}"
+                         AutomationProperties.LiveSetting="Polite" Margin="0,-10,0,0" />
 
-            <TextBlock Grid.Row="4" Grid.Column="0" Classes="field-label" Text="物理网卡（可选）" />
-            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding InterfaceName, Mode=TwoWay}"
-                     PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
-            <TextBlock Grid.Row="4" Grid.Column="3" Classes="field-label" Text="IPv4 网关（可选）" />
-            <TextBox Grid.Row="4" Grid.Column="4" Text="{Binding Gateway4, Mode=TwoWay}"
-                     PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
-
-            <TextBlock Grid.Row="6" Grid.Column="0" Classes="field-label" Text="MTU" />
-            <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding MtuText, Mode=TwoWay}"
-                     IsEnabled="{Binding CanEditConfiguration}" />
-            <TextBlock Grid.Row="6" Grid.Column="3" Classes="field-label" Text="日志级别" />
-            <ComboBox Grid.Row="6" Grid.Column="4"
-                      ItemsSource="{Binding LogLevels}"
-                      SelectedItem="{Binding LogLevel, Mode=TwoWay}"
-                      IsEnabled="{Binding CanEditConfiguration}" />
-
-            <CheckBox Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2"
-                      IsChecked="{Binding Ipv6, Mode=TwoWay}" Content="接管 IPv6"
-                      IsEnabled="{Binding CanEditConfiguration}" />
-            <CheckBox Grid.Row="8" Grid.Column="3" Grid.ColumnSpan="2"
-                      IsChecked="{Binding AutoBypass, Mode=TwoWay}" Content="自动发现本地代理远端节点"
-                      IsEnabled="{Binding CanEditConfiguration}" />
-
-            <CheckBox Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="2"
-                      IsChecked="{Binding TcpOnly, Mode=TwoWay}" Content="TCP-only 稳定模式"
-                      IsEnabled="{Binding CanEditConfiguration}" />
-            <TextBlock Grid.Row="10" Grid.Column="3" Grid.ColumnSpan="2" Classes="hint"
-                       Text="阻断所选应用的全部非 DNS UDP，让支持回退的应用改走 TCP。" />
-
-            <CheckBox Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="5"
-                      IsChecked="{Binding IcmpDirect, Mode=TwoWay}"
-                      Content="ICMP 直连（所有应用的 ping 绕过 SOCKS5；网络切换时自动暂停）"
-                      IsEnabled="{Binding CanEditConfiguration}" />
-
-            <Border Grid.Row="14" Grid.Column="0" Grid.ColumnSpan="5"
-                    Background="{DynamicResource InfoBackgroundBrush}" BorderBrush="{DynamicResource InfoBorderBrush}" BorderThickness="1"
-                    CornerRadius="6" Padding="12">
-              <TextBlock Classes="hint" Text="{Binding LifecycleHint}" />
-            </Border>
-          </Grid>
-        </ScrollViewer>
-      </TabItem>
-
-      <TabItem Header="应用分流">
-        <Grid Margin="22" RowDefinitions="Auto,12,Auto,6,*,8,Auto,18,Auto,6,*,8,Auto">
-          <TextBlock Text="{Binding ApplicationModeHint}" Foreground="{DynamicResource TextSecondaryBrush}" />
-          <TextBlock Grid.Row="2" Text="应用程序" />
-          <ListBox x:Name="ApplicationsListBox" Grid.Row="4"
-                   ItemsSource="{Binding Applications}" SelectionMode="Multiple,Toggle">
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="models:TargetApplication">
-                <StackPanel Margin="4" Spacing="2">
-                  <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding SecondaryText}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
-                             FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
-                             TextTrimming="CharacterEllipsis" />
+              <StackPanel Spacing="12">
+                <TextBlock Text="连接选项" Classes="section-title" />
+                <Grid ColumnDefinitions="*,24,*">
+                  <StackPanel Spacing="4">
+                    <CheckBox IsChecked="{Binding Ipv6, Mode=TwoWay}" Content="接管 IPv6"
+                              IsEnabled="{Binding CanEditConfiguration}" />
+                    <TextBlock Classes="hint" Margin="28,0,0,0" Text="同时处理所选应用的 IPv6 连接。" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Spacing="4">
+                    <CheckBox IsChecked="{Binding TcpOnly, Mode=TwoWay}" Content="TCP-only 稳定模式"
+                              IsEnabled="{Binding CanEditConfiguration}" />
+                    <TextBlock Classes="hint" Margin="28,0,0,0" Text="阻断所选应用的非 DNS UDP，让支持回退的应用改走 TCP。" />
+                  </StackPanel>
+                </Grid>
+                <StackPanel Spacing="4">
+                  <CheckBox IsChecked="{Binding IcmpDirect, Mode=TwoWay}" Content="允许 ping 直连"
+                            IsEnabled="{Binding CanEditConfiguration}" />
+                  <TextBlock Classes="hint" Margin="28,0,0,0" Text="所有应用的 ICMP 流量绕过 SOCKS5；网络切换时自动暂停。" />
                 </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-          <StackPanel Grid.Row="6" Orientation="Horizontal">
-            <Button Content="{Binding ApplicationPickerLabel}" Click="AddApplicationButton_Click"
-                    IsEnabled="{Binding CanEditConfiguration}" />
-            <Button Content="移除选中" Click="RemoveApplicationButton_Click"
-                    IsEnabled="{Binding CanEditConfiguration}" />
-          </StackPanel>
+              </StackPanel>
 
-          <TextBlock Grid.Row="8" Text="Microsoft Store / MSIX PackageFamilyName"
-                     IsVisible="{Binding SupportsPackageFamilies}" />
-          <ListBox x:Name="PackageFamiliesListBox" Grid.Row="10"
-                   ItemsSource="{Binding PackageFamilies}" SelectionMode="Multiple,Toggle"
-                   IsVisible="{Binding SupportsPackageFamilies}" />
-          <StackPanel Grid.Row="12" Orientation="Horizontal" IsVisible="{Binding SupportsPackageFamilies}">
-            <TextBox Width="420" Text="{Binding PackageFamilyInput, Mode=TwoWay}"
-                     PlaceholderText="OpenAI.Codex_2p2nqsd0c76g0"
-                     FontFamily="ui-monospace, Cascadia Mono, Consolas"
-                     IsEnabled="{Binding CanEditConfiguration}" />
-            <Button Content="添加包族" Click="AddPackageFamilyButton_Click"
-                    IsEnabled="{Binding CanEditConfiguration}" />
-            <Button Content="移除选中" Click="RemovePackageFamilyButton_Click"
-                    IsEnabled="{Binding CanEditConfiguration}" />
-          </StackPanel>
-        </Grid>
-      </TabItem>
+              <Expander x:Name="AdvancedSettings" Header="高级网络设置">
+                <StackPanel Spacing="16" Margin="16">
+                  <Grid ColumnDefinitions="*,24,*" RowDefinitions="Auto,16,Auto,16,Auto">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="可信 DNS（可选）" />
+                      <TextBox Text="{Binding TrustedDns, Mode=TwoWay}" AutomationProperties.Name="可信 DNS"
+                               Classes.invalid="{Binding HasDnsError}" AutomationProperties.HelpText="{Binding DnsValidationMessage}"
+                               PlaceholderText="留空使用系统 DNS" IsEnabled="{Binding CanEditConfiguration}" />
+                      <TextBlock Classes="error" Text="{Binding DnsValidationMessage}" IsVisible="{Binding HasDnsError}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="6">
+                      <TextBlock Text="TUN 设备名称" />
+                      <TextBox Text="{Binding Device, Mode=TwoWay}" AutomationProperties.Name="TUN 设备名称"
+                               Classes.invalid="{Binding HasDeviceError}" AutomationProperties.HelpText="{Binding DeviceValidationMessage}"
+                               IsEnabled="{Binding CanEditConfiguration}" />
+                      <TextBlock Classes="error" Text="{Binding DeviceValidationMessage}" IsVisible="{Binding HasDeviceError}" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="2" Spacing="6">
+                      <TextBlock Text="物理网卡（可选）" />
+                      <TextBox Text="{Binding InterfaceName, Mode=TwoWay}" AutomationProperties.Name="物理网卡"
+                               PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="2" Grid.Column="2" Spacing="6">
+                      <TextBlock Text="IPv4 网关（可选）" />
+                      <TextBox Text="{Binding Gateway4, Mode=TwoWay}" AutomationProperties.Name="IPv4 网关"
+                               Classes.invalid="{Binding HasGatewayError}" AutomationProperties.HelpText="{Binding GatewayValidationMessage}"
+                               PlaceholderText="留空自动检测" IsEnabled="{Binding CanEditConfiguration}" />
+                      <TextBlock Classes="error" Text="{Binding GatewayValidationMessage}" IsVisible="{Binding HasGatewayError}" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="4" Spacing="6">
+                      <TextBlock Text="MTU" />
+                      <TextBox x:Name="MtuTextBox" Text="{Binding MtuText, Mode=TwoWay}" AutomationProperties.Name="MTU"
+                               AutomationProperties.HelpText="{Binding MtuValidationMessage}" Classes.invalid="{Binding HasMtuError}"
+                               IsEnabled="{Binding CanEditConfiguration}" />
+                      <TextBlock Text="{Binding MtuValidationMessage}" Classes="error" IsVisible="{Binding HasMtuError}" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="4" Grid.Column="2" Spacing="6">
+                      <TextBlock Text="日志级别" />
+                      <ComboBox ItemsSource="{Binding LogLevels}" SelectedItem="{Binding LogLevel, Mode=TwoWay}"
+                                AutomationProperties.Name="日志级别" IsEnabled="{Binding CanEditConfiguration}" />
+                    </StackPanel>
+                  </Grid>
+                  <CheckBox IsChecked="{Binding AutoBypass, Mode=TwoWay}" Content="自动发现本地代理远端节点"
+                            IsEnabled="{Binding CanEditConfiguration}" />
+                </StackPanel>
+              </Expander>
+              <TextBlock Classes="hint" Text="{Binding LifecycleHint}" />
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
 
-      <TabItem Header="绕行与日志">
-        <Grid Margin="22" ColumnDefinitions="0.42*,18,0.58*" RowDefinitions="Auto,10,*">
-          <TextBlock Grid.Column="0" Text="始终直连（域名、IP 或 CIDR）" />
-          <TextBlock Grid.Column="2" Text="运行日志（最多保留末尾 128 KiB）" />
-          <Grid Grid.Row="2" Grid.Column="0" RowDefinitions="Auto,8,*,8,Auto">
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBox Text="{Binding BypassInput, Mode=TwoWay}"
-                       KeyDown="BypassInput_KeyDown"
-                       FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
-                       PlaceholderText="example.com、10.0.0.0/8"
-                       IsEnabled="{Binding CanEditConfiguration}" />
-              <Button Grid.Column="1" Content="添加" Click="AddBypassButton_Click"
-                      IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
-            </Grid>
-            <TextBlock Grid.Row="1" />
-            <ListBox x:Name="BypassTargetsListBox" Grid.Row="2"
-                     ItemsSource="{Binding BypassTargets}" SelectionMode="Multiple,Toggle"
-                     FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas" />
-            <TextBlock Grid.Row="3" />
-            <Grid Grid.Row="4" ColumnDefinitions="*,Auto">
-              <TextBlock Classes="hint" VerticalAlignment="Center"
-                         Text="可一次粘贴多个目标，以空格、逗号、分号或换行分隔。" />
-              <Button Grid.Column="1" Content="移除选中" Click="RemoveBypassButton_Click"
-                      IsEnabled="{Binding CanEditConfiguration}" Margin="8,0,0,0" />
+        <TabItem Header="应用分流">
+          <Grid Margin="16,20" RowDefinitions="Auto,16,*">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Binding ApplicationSummary}" Classes="section-title" />
+              <TextBlock Text="{Binding ApplicationModeHint}" Classes="hint" />
+              <TextBlock Text="{Binding ApplicationValidationMessage}" Classes="error" IsVisible="{Binding HasApplicationError}" />
+            </StackPanel>
+            <Grid x:Name="ApplicationSectionsGrid" Grid.Row="2" RowDefinitions="*,16,*">
+              <Grid RowDefinitions="Auto,10,*">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="应用程序" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" IsEnabled="{Binding CanEditConfiguration}">
+                    <Button Content="{Binding ApplicationPickerLabel}" Click="AddApplicationButton_Click" />
+                    <Button Content="移除选中" Click="RemoveApplicationButton_Click"
+                            IsEnabled="{Binding !!#ApplicationsListBox.SelectedItem}" />
+                  </StackPanel>
+                </Grid>
+                <Grid Grid.Row="2">
+                  <ListBox x:Name="ApplicationsListBox" ItemsSource="{Binding Applications}" SelectionMode="Multiple,Toggle"
+                           AutomationProperties.Name="通过代理连接的应用">
+                    <ListBox.Styles>
+                      <Style Selector="ListBoxItem" x:DataType="models:TargetApplication">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}" />
+                        <Setter Property="AutomationProperties.HelpText" Value="{Binding SecondaryText}" />
+                      </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="models:TargetApplication">
+                        <StackPanel Margin="8,7" Spacing="4">
+                          <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding SecondaryText}" Classes="hint" TextWrapping="NoWrap"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SecondaryText}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <TextBlock Text="点击“添加应用”，选择需要代理的应用。" Classes="hint"
+                             IsVisible="{Binding !HasApplications}" IsHitTestVisible="False"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+                </Grid>
+              </Grid>
+              <Grid Grid.Row="2" RowDefinitions="Auto,8,Auto,10,*" IsVisible="{Binding SupportsPackageFamilies}">
+                <TextBlock Text="Microsoft Store 应用（PackageFamilyName）" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Grid Grid.Row="2" ColumnDefinitions="*,10,Auto,8,Auto" IsEnabled="{Binding CanEditConfiguration}">
+                  <TextBox Text="{Binding PackageFamilyInput, Mode=TwoWay}" AutomationProperties.Name="PackageFamilyName"
+                           PlaceholderText="PackageFamilyName，例如 Example.App_abc123def4567" />
+                  <Button Grid.Column="2" Content="添加包族" Click="AddPackageFamilyButton_Click" />
+                  <Button Grid.Column="4" Content="移除选中" Click="RemovePackageFamilyButton_Click"
+                          IsEnabled="{Binding !!#PackageFamiliesListBox.SelectedItem}" />
+                </Grid>
+                <Grid Grid.Row="4">
+                  <ListBox x:Name="PackageFamiliesListBox" ItemsSource="{Binding PackageFamilies}" SelectionMode="Multiple,Toggle"
+                           AutomationProperties.Name="通过代理连接的 Microsoft Store 应用包族" />
+                  <TextBlock Text="按 PackageFamilyName 匹配应用及其子进程。" Classes="hint" Margin="20"
+                             IsVisible="{Binding !HasPackageFamilies}" IsHitTestVisible="False"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+              </Grid>
             </Grid>
           </Grid>
-          <TextBox x:Name="LogTextBox" Grid.Row="2" Grid.Column="2" Text="{Binding LogText}"
-                   IsReadOnly="True" AcceptsReturn="True"
-                   ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                   VerticalContentAlignment="Top"
-                   FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
-                   Background="{DynamicResource LogBackgroundBrush}" Foreground="{DynamicResource LogForegroundBrush}" BorderThickness="0" />
-        </Grid>
-      </TabItem>
-    </TabControl>
+        </TabItem>
 
-    <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto">
-      <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-        <TextBlock Text="主题" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0" />
-        <ComboBox Width="112" ItemsSource="{Binding ThemeModes}" SelectedItem="{Binding ThemeMode, Mode=TwoWay}"
-                  Margin="0,0,12,0" />
-        <Button Content="移除旧服务" Click="UninstallButton_Click"
-                IsVisible="{Binding HasLegacyService}" IsEnabled="{Binding CanRemoveLegacyService}" Margin="0" />
+        <TabItem Header="直连规则">
+          <Grid Margin="16,20" RowDefinitions="Auto,16,Auto,12,*,12,Auto">
+            <StackPanel Spacing="6">
+              <TextBlock Text="始终直连" Classes="section-title" />
+              <TextBlock Classes="hint" Text="这些域名、IP 和网段通过系统网络连接，不经过代理。" />
+            </StackPanel>
+            <Grid Grid.Row="2" ColumnDefinitions="*,10,Auto">
+              <TextBox Text="{Binding BypassInput, Mode=TwoWay}" KeyDown="BypassInput_KeyDown"
+                       AutomationProperties.Name="新的直连规则" PlaceholderText="example.com、10.0.0.0/8"
+                       IsEnabled="{Binding CanEditConfiguration}" />
+              <Button Grid.Column="2" Content="添加规则" Click="AddBypassButton_Click" IsEnabled="{Binding CanEditConfiguration}" />
+            </Grid>
+            <Grid Grid.Row="4">
+              <ListBox x:Name="BypassTargetsListBox" ItemsSource="{Binding BypassTargets}" SelectionMode="Multiple,Toggle"
+                       AutomationProperties.Name="始终直连的域名、IP 和网段" />
+              <TextBlock Classes="hint" Text="尚未添加直连规则" IsVisible="{Binding !HasBypassTargets}"
+                         IsHitTestVisible="False" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <Grid Grid.Row="6" ColumnDefinitions="*,16,Auto" IsEnabled="{Binding CanEditConfiguration}">
+              <TextBlock Classes="hint" VerticalAlignment="Center" Text="可一次粘贴多个目标，以空格、逗号、分号或换行分隔。" />
+              <Button Grid.Column="2" Content="移除选中" Click="RemoveBypassButton_Click"
+                      IsEnabled="{Binding !!#BypassTargetsListBox.SelectedItem}" />
+            </Grid>
+          </Grid>
+        </TabItem>
+
+        <TabItem Header="诊断">
+          <Grid Margin="16,20" RowDefinitions="Auto,16,Auto,10,*">
+            <Grid ColumnDefinitions="*,16,Auto">
+              <StackPanel Spacing="6">
+                <TextBlock Text="连接详情" Classes="section-title" />
+                <TextBlock Text="{Binding DiagnosticsDetail}" Classes="hint" />
+              </StackPanel>
+              <Button Grid.Column="2" Content="刷新状态" Click="RefreshButton_Click" IsEnabled="{Binding !IsBusy}" />
+            </Grid>
+            <Grid Grid.Row="2" ColumnDefinitions="*,16,Auto">
+              <StackPanel Spacing="4">
+                <TextBlock Text="运行日志" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding LogFollowHint}" Classes="hint" />
+              </StackPanel>
+              <CheckBox Grid.Column="2" Content="自动滚动" IsChecked="{Binding FollowLogs, Mode=TwoWay}"
+                        VerticalAlignment="Center" />
+            </Grid>
+            <controls:LogViewer x:Name="LogTextBox" Grid.Row="4" Text="{Binding LogText}"
+                                FollowTail="{Binding FollowLogs, Mode=TwoWay}"
+                                IsReadOnly="True" AcceptsReturn="True" AutomationProperties.Name="运行日志"
+                                ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                VerticalContentAlignment="Top" FontSize="13"
+                                FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
+                                Background="{DynamicResource LogBackgroundBrush}" Foreground="{DynamicResource LogForegroundBrush}"
+                                BorderThickness="0" Padding="12" />
+          </Grid>
+        </TabItem>
+      </TabControl>
+    </Border>
+
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,20,*,16,Auto">
+      <ComboBox Width="116" ItemsSource="{Binding ThemeModes}" SelectedItem="{Binding ThemeMode, Mode=TwoWay}"
+                AutomationProperties.Name="界面主题" VerticalAlignment="Center" />
+      <StackPanel Grid.Column="2" Spacing="3" VerticalAlignment="Center">
+        <TextBlock Text="{Binding ConfigurationStateText}" Classes="hint" AutomationProperties.LiveSetting="Polite" />
+        <TextBlock Text="{Binding OperationText}" Classes="hint" AutomationProperties.LiveSetting="Polite" />
       </StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-        <ProgressBar Width="72" Height="4" IsIndeterminate="True" IsVisible="{Binding ShowProgress}" />
-        <TextBlock Text="{Binding OperationText}" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
-      </StackPanel>
-      <StackPanel Grid.Column="2" Orientation="Horizontal">
+      <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Content="移除旧服务" Click="UninstallButton_Click" IsVisible="{Binding HasLegacyService}"
+                IsEnabled="{Binding CanRemoveLegacyService}" />
         <Button Content="保存配置" Click="SaveButton_Click" IsEnabled="{Binding CanSave}" />
-        <Button Classes="primary" Content="启动" Click="StartButton_Click" IsEnabled="{Binding CanStart}"
-                Background="#1677FF" BorderBrush="#0B63CE" Foreground="White" />
-        <Button Content="保存并重启" Click="RestartButton_Click" IsEnabled="{Binding CanRestart}" />
-        <Button Content="停止" Click="StopButton_Click" IsEnabled="{Binding CanStop}" Margin="0" />
       </StackPanel>
     </Grid>
   </Grid>

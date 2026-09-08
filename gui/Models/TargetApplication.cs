@@ -9,4 +9,6 @@ public sealed record TargetApplication(
     public string SecondaryText => string.IsNullOrWhiteSpace(BundleIdentifier)
         ? ApplicationPath
         : $"{ApplicationPath} · {BundleIdentifier}";
+
+    public override string ToString() => DisplayName;
 }
