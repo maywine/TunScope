@@ -28,20 +28,20 @@ make gui-test
 在仓库根目录构建当前 Mac 架构的 `.app`：
 
 ```bash
-make macos-gui VERSION=0.3.20
+make macos-gui VERSION=0.3.21
 ```
 
 明确选择 Mac 架构：
 
 ```bash
-make macos-gui VERSION=0.3.20 MACOS_RID=osx-arm64
-make macos-gui VERSION=0.3.20 MACOS_RID=osx-x64
+make macos-gui VERSION=0.3.21 MACOS_RID=osx-arm64
+make macos-gui VERSION=0.3.21 MACOS_RID=osx-x64
 ```
 
 构建 Windows GUI：
 
 ```bash
-make windows-gui VERSION=0.3.20
+make windows-gui VERSION=0.3.21
 ```
 
 Windows 发布包仍需把 `TunScope.exe`、`tunscope-cli.exe` 和 `wintun.dll` 放在同一目录。macOS 打包脚本会自动编译同架构 Go helper、生成图标、建立 `.app` 目录并完成本机 ad-hoc 签名验证。

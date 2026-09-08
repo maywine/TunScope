@@ -38,7 +38,7 @@ ICMP Echo（默认开启）
 
 ```bash
 cd ..
-make macos-gui VERSION=0.3.20
+make macos-gui VERSION=0.3.21
 ```
 
 构建脚本会按当前 Mac 架构生成 `dist/tunscope-<版本>-osx-<架构>/TunScope.app`。也可通过 `MACOS_RID=osx-x64` 或 `MACOS_RID=osx-arm64` 明确构建 Intel/Apple Silicon 版本。脚本会用系统 `go` 生成同架构的 `tunscope-helper`，并放进 `TunScope.app/Contents/Resources/`。

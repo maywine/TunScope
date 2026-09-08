@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-VERSION=${1:-0.3.20}
+VERSION=${1:-0.3.21}
 RID=${2:-osx-arm64}
 DESTINATION=${3:-"$PROJECT_ROOT/dist"}
 

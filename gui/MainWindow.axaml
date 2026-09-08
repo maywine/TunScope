@@ -75,6 +75,11 @@
     <Style Selector="TextBox.invalid">
       <Setter Property="BorderBrush" Value="{DynamicResource ErrorTextBrush}" />
     </Style>
+    <!-- Fluent's hover/focus template setters otherwise replace only the log
+         background, leaving its explicitly configured text color unchanged. -->
+    <Style Selector="TextBox.log-viewer:pointerover /template/ Border#PART_BorderElement, TextBox.log-viewer:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{DynamicResource LogBackgroundBrush}" />
+    </Style>
     <Style Selector="ComboBox">
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="MinHeight" Value="36" />
@@ -360,13 +365,16 @@
               <CheckBox Grid.Column="2" Content="自动滚动" IsChecked="{Binding FollowLogs, Mode=TwoWay}"
                         VerticalAlignment="Center" />
             </Grid>
-            <controls:LogViewer x:Name="LogTextBox" Grid.Row="4" Text="{Binding LogText}"
+            <controls:LogViewer x:Name="LogTextBox" Classes="log-viewer" Grid.Row="4" Text="{Binding LogText}"
                                 FollowTail="{Binding FollowLogs, Mode=TwoWay}"
                                 IsReadOnly="True" AcceptsReturn="True" AutomationProperties.Name="运行日志"
                                 ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                 VerticalContentAlignment="Top" FontSize="13"
                                 FontFamily="ui-monospace, SFMono-Regular, Cascadia Mono, Consolas"
                                 Background="{DynamicResource LogBackgroundBrush}" Foreground="{DynamicResource LogForegroundBrush}"
+                                SelectionBrush="{DynamicResource LogSelectionBrush}"
+                                SelectionForegroundBrush="{DynamicResource LogForegroundBrush}"
+                                CaretBrush="{DynamicResource LogForegroundBrush}"
                                 BorderThickness="0" Padding="12" />
           </Grid>
         </TabItem>

@@ -23,8 +23,9 @@
           <SolidColorBrush x:Key="TabSelectedForegroundBrush" Color="#0B63CE" />
           <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#F7F9FC" />
           <SolidColorBrush x:Key="InfoBorderBrush" Color="#E3E8EF" />
-          <SolidColorBrush x:Key="LogBackgroundBrush" Color="#10151D" />
-          <SolidColorBrush x:Key="LogForegroundBrush" Color="#DDE7F5" />
+          <SolidColorBrush x:Key="LogBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="LogForegroundBrush" Color="#172033" />
+          <SolidColorBrush x:Key="LogSelectionBrush" Color="#CCE0FF" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="AppBackgroundBrush" Color="#11151C" />
@@ -46,6 +47,7 @@
           <SolidColorBrush x:Key="InfoBorderBrush" Color="#3C4758" />
           <SolidColorBrush x:Key="LogBackgroundBrush" Color="#0B0F14" />
           <SolidColorBrush x:Key="LogForegroundBrush" Color="#DDE7F5" />
+          <SolidColorBrush x:Key="LogSelectionBrush" Color="#26466B" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

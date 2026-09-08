@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Presenters;
+using Avalonia.Media;
 using Avalonia.Input;
 using Avalonia.Input.Raw;
 using Avalonia.Headless;
@@ -16,6 +18,71 @@ namespace TunScope.GUI.Tests;
 
 public sealed class MainWindowTests
 {
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LogContrastSurvivesHoverFocusSelectionAndThemeChanges(bool windows)
+    {
+        var window = new MainWindow(new GuiController(new FakePlatformService(windows), false));
+        window.Show();
+        try
+        {
+            window.FindControl<TabControl>("MainTabs")!.SelectedIndex = 3;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            var viewer = window.FindControl<LogViewer>("LogTextBox")!;
+            var background = viewer.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PART_BorderElement");
+            var presenter = viewer.GetVisualDescendants().OfType<TextPresenter>().Single();
+            var logPoint = viewer.TranslatePoint(new Point(40, 40), window)!.Value;
+            foreach (var theme in new[] { ThemeVariant.Light, ThemeVariant.Dark, ThemeVariant.Light })
+            {
+                window.RequestedThemeVariant = theme;
+                window.FindControl<Button>("PrimaryActionButton")!.Focus();
+                window.MouseMove(new Point(1, 1));
+                window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                CheckContrast("idle");
+                window.MouseMove(logPoint);
+                Assert.True(viewer.IsPointerOver);
+                CheckContrast("hover");
+                viewer.Focus();
+                Assert.True(viewer.IsFocused);
+                CheckContrast("focused");
+                viewer.SelectionStart = Math.Max(0, viewer.Text!.Length - 12);
+                viewer.SelectionEnd = viewer.Text.Length;
+                CheckContrast("selected");
+                var selectedForeground = presenter.SelectionForegroundBrush ?? presenter.Foreground;
+                Assert.True(Contrast(selectedForeground!, presenter.SelectionBrush!) >= 4.5,
+                    $"{theme}: selected log text has insufficient contrast");
+                Capture(window, $"logs-{(windows ? "windows" : "macos")}-{theme}-focused");
+            }
+
+            void CheckContrast(string state)
+            {
+                var ratio = Contrast(presenter.Foreground!, background.Background!);
+                Assert.True(ratio >= 4.5, $"{window.ActualThemeVariant} {state}: log text contrast is {ratio:F2}:1");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    private static double Contrast(IBrush foreground, IBrush background)
+    {
+        var a = Luminance(((ISolidColorBrush)foreground).Color);
+        var b = Luminance(((ISolidColorBrush)background).Color);
+        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+    }
+
+    private static double Luminance(Color color)
+    {
+        static double Linear(byte channel)
+        {
+            var value = channel / 255d;
+            return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+    }
+
     [AvaloniaTheory]
     [InlineData(false, false, false)]
     [InlineData(false, true, false)]

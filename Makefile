@@ -2,7 +2,7 @@ BINARY := bin/tunscope
 WINDOWS_BINARY := bin/tunscope-windows-amd64.exe
 WINDOWS_GUI_DIR := bin/windows-gui
 MACOS_RID ?= $(if $(filter arm64,$(shell uname -m)),osx-arm64,osx-x64)
-VERSION ?= 0.3.20
+VERSION ?= 0.3.21
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build macos-gui windows-amd64 windows-gui test gui-test clean install uninstall

@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TunScope</AssemblyName>
     <RootNamespace>TunScope.GUI</RootNamespace>
-    <Version>0.3.20</Version>
+    <Version>0.3.21</Version>
     <AssemblyTitle>TunScope</AssemblyTitle>
     <Product>TunScope</Product>
     <Description>TunScope cross-platform desktop application</Description>
