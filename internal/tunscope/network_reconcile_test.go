@@ -190,36 +190,51 @@ func TestGlobalDirectICMPGetsScopedRoutesWithoutDirectDNS(t *testing.T) {
 	}
 }
 
-func TestChangeMissingRouteFallsBackToAdd(t *testing.T) {
+func TestReplaceMissingRouteAddsExactRoute(t *testing.T) {
 	route := Route{
 		Family: "inet", Kind: "net", Target: "1.0.0.0/8",
 		Gateway: "192.168.50.1", Scope: "en0", Purpose: "direct-scope",
 	}
 	runner := &scriptedRouteRunner{errs: []error{errors.New("route: writing to routing socket: not in table"), nil}}
-	if err := changeOrRestoreRoute(runner, route); err != nil {
+	if err := replaceOwnedRoute(runner, route, route); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0], " change ") || !strings.Contains(runner.calls[1], " add ") {
-		t.Fatalf("fallback calls = %#v, want change then add", runner.calls)
+	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0], " delete ") || !strings.Contains(runner.calls[1], " add ") {
+		t.Fatalf("replacement calls = %#v, want exact delete then add", runner.calls)
 	}
 }
 
-func TestChangeMissingRouteAddRaceRetriesChange(t *testing.T) {
+func TestReplaceRouteAddConflictNeverFallsBackToChange(t *testing.T) {
 	route := Route{
 		Family: "inet", Kind: "host", Target: "1.1.1.1",
 		Gateway: "192.168.50.1", Purpose: "dns-direct",
 	}
+	conflict := errors.New("route: writing to routing socket: File exists")
 	runner := &scriptedRouteRunner{errs: []error{
 		errors.New("route: writing to routing socket: not in table"),
-		errors.New("route: writing to routing socket: File exists"),
-		nil,
+		conflict,
 	}}
-	if err := changeOrRestoreRoute(runner, route); err != nil {
-		t.Fatal(err)
+	if err := replaceOwnedRoute(runner, route, route); !errors.Is(err, conflict) {
+		t.Fatalf("replacement error = %v, want add conflict", err)
 	}
-	if len(runner.calls) != 3 || !strings.Contains(runner.calls[0], " change ") ||
-		!strings.Contains(runner.calls[1], " add ") || !strings.Contains(runner.calls[2], " change ") {
-		t.Fatalf("raced fallback calls = %#v, want change/add/change", runner.calls)
+	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0], " delete ") ||
+		!strings.Contains(runner.calls[1], " add ") {
+		t.Fatalf("raced replacement calls = %#v, want delete/add without change", runner.calls)
+	}
+}
+
+func TestReplaceRouteStopsAfterDeleteFailure(t *testing.T) {
+	route := Route{
+		Family: "inet", Kind: "net", Target: "1.0.0.0/8",
+		Gateway: "192.168.50.1", Scope: "en0", Purpose: "direct-scope",
+	}
+	failure := errors.New("route: permission denied")
+	runner := &scriptedRouteRunner{errs: []error{failure}}
+	if err := replaceOwnedRoute(runner, route, route); !errors.Is(err, failure) {
+		t.Fatalf("replacement error = %v, want delete failure", err)
+	}
+	if len(runner.calls) != 1 || !strings.Contains(runner.calls[0], " delete ") {
+		t.Fatalf("calls after delete failure = %#v", runner.calls)
 	}
 }
 
@@ -262,16 +277,20 @@ func TestReconcileGatewayChangesDirectRoutesBeforeBypassAndDNS(t *testing.T) {
 	if err := app.reconcilePhysicalRoutes(state, cfg, after, bypasses, dns, []string{"203.0.113.9"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != len(ipv4TunNetworks)+2 {
-		t.Fatalf("routing calls = %d, want %d: %#v", len(runner.calls), len(ipv4TunNetworks)+2, runner.calls)
+	if len(runner.calls) != 2*(len(ipv4TunNetworks)+2) {
+		t.Fatalf("routing calls = %d, want %d: %#v", len(runner.calls), 2*(len(ipv4TunNetworks)+2), runner.calls)
 	}
-	for i := 0; i < len(ipv4TunNetworks); i++ {
-		if !strings.Contains(runner.calls[i], " change ") || !strings.Contains(runner.calls[i], "-ifscope en0") {
-			t.Fatalf("call %d = %q, want direct-scope route change first", i, runner.calls[i])
+	for i := 0; i < 2*len(ipv4TunNetworks); i++ {
+		action := " delete "
+		if i%2 == 1 {
+			action = " add "
+		}
+		if !strings.Contains(runner.calls[i], action) || !strings.Contains(runner.calls[i], "-ifscope en0") {
+			t.Fatalf("call %d = %q, want direct-scope route replacement first", i, runner.calls[i])
 		}
 	}
-	if !strings.Contains(runner.calls[len(ipv4TunNetworks)], "203.0.113.9") {
-		t.Fatalf("call after direct routes = %q, want bypass", runner.calls[len(ipv4TunNetworks)])
+	if !strings.Contains(runner.calls[2*len(ipv4TunNetworks)], "203.0.113.9") {
+		t.Fatalf("call after direct routes = %q, want bypass", runner.calls[2*len(ipv4TunNetworks)])
 	}
 	if !strings.Contains(runner.calls[len(runner.calls)-1], "1.1.1.1") {
 		t.Fatalf("last call = %q, want DNS route", runner.calls[len(runner.calls)-1])
@@ -1333,7 +1352,7 @@ func TestMonitorRefreshesRoutesAndRebindsAfterSameNetworkReturns(t *testing.T) {
 	}
 	mutations := 0
 	for _, call := range runner.calls {
-		if !strings.HasPrefix(call, "/sbin/route -n change ") {
+		if !strings.HasPrefix(call, "/sbin/route -n delete ") && !strings.HasPrefix(call, "/sbin/route -n add ") {
 			continue
 		}
 		mutations++
@@ -1341,8 +1360,8 @@ func TestMonitorRefreshesRoutesAndRebindsAfterSameNetworkReturns(t *testing.T) {
 			t.Fatalf("same-network recovery touched non-scoped route: %q", call)
 		}
 	}
-	if mutations != len(ipv4TunNetworks) {
-		t.Fatalf("same-network route refreshes = %d, want %d: %#v", mutations, len(ipv4TunNetworks), runner.calls)
+	if mutations != 2*len(ipv4TunNetworks) {
+		t.Fatalf("same-network route refreshes = %d, want %d: %#v", mutations, 2*len(ipv4TunNetworks), runner.calls)
 	}
 	if _, err := monitor.poll(app, state, cfg); err != nil {
 		t.Fatalf("same-network recovery repeated on next poll: %v", err)

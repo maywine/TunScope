@@ -82,10 +82,9 @@ func routeArgs(action string, route Route) []string {
 	if route.Scope != "" {
 		args = append(args, "-ifscope", route.Scope)
 	}
-	// RTM_CHANGE does not reliably refresh the source address cached by an
-	// interface-scoped route after DHCP replaces an address. Tell XNU which
-	// current interface address to attach to every add/change. A delete must
-	// not carry -ifa: the recorded address may already have been removed.
+	// Tell XNU which current interface address to attach to each added route
+	// after DHCP replaces an address. A delete must not carry -ifa: the recorded
+	// address may already have been removed.
 	if action != "delete" && route.Source != "" {
 		args = append(args, "-ifa", route.Source)
 	}
@@ -105,10 +104,5 @@ func addRoute(r commandRunner, route Route) error {
 
 func deleteRoute(r commandRunner, route Route) error {
 	_, err := r.Run("/sbin/route", routeArgs("delete", route)...)
-	return err
-}
-
-func changeRoute(r commandRunner, route Route) error {
-	_, err := r.Run("/sbin/route", routeArgs("change", route)...)
 	return err
 }

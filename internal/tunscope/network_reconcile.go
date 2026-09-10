@@ -700,14 +700,8 @@ func (a *App) reconcilePhysicalRoutesWithRefresh(
 	}
 
 	for _, change := range plan.changes {
-		var err error
-		if change.before.Family == "inet" && change.before.Source != change.after.Source {
-			err = replaceOwnedRoute(a.runner, change.before, change.after)
-		} else {
-			err = changeOrRestoreRoute(a.runner, change.after)
-		}
-		if err != nil {
-			return fmt.Errorf("change %s route %s: %w", change.after.Purpose, change.after.Target, err)
+		if err := replaceOwnedRoute(a.runner, change.before, change.after); err != nil {
+			return fmt.Errorf("replace %s route %s: %w", change.after.Purpose, change.after.Target, err)
 		}
 	}
 	// New DNS and peer routes are installed before obsolete ones are removed,
@@ -739,41 +733,19 @@ func (a *App) reconcilePhysicalRoutesWithRefresh(
 	return nil
 }
 
-// changeOrRestoreRoute handles the normal macOS Wi-Fi handoff behavior where
-// the kernel removes an interface-scoped route before the stable replacement
-// gateway is available. Since this logical route is already in our ownership
-// ledger, restoring it with add is safe. If it races with the kernel and add
-// reports EEXIST, retrying change is likewise limited to an already-owned key.
-func changeOrRestoreRoute(r commandRunner, desired Route) error {
-	if err := changeRoute(r, desired); err != nil {
-		if !routeAlreadyMissing(err) {
-			return err
-		}
-		if addErr := addRoute(r, desired); addErr != nil {
-			if routeAlreadyExists(addErr) {
-				return changeRoute(r, desired)
-			}
-			return addErr
-		}
-	}
-	return nil
-}
-
-// replaceOwnedRoute removes an owned physical route before adding its new
-// source-address form. RTM_CHANGE can leave XNU cloned routes attached to the
-// removed DHCP address; delete/add invalidates those clones. Broad TUN capture
-// routes never enter the managed physical route plan and therefore stay up.
+// replaceOwnedRoute uses exact-key delete/add for every owned physical route,
+// including same-address DHCP renewals. Suspension or macOS may have already
+// removed the old route. XNU's RTM_CHANGE can then succeed against the system
+// default instead of reporting ESRCH, leaving the owned route absent. A lookup
+// before change would still race with route removal, so never use RTM_CHANGE.
+// Delete/add also discards clones tied to an old source address. Broad TUN
+// capture routes never enter this plan. Any add conflict is returned for the
+// owner's journaled cleanup rather than falling back to an unsafe change.
 func replaceOwnedRoute(r commandRunner, before, after Route) error {
 	if err := deleteRoute(r, before); err != nil && !routeAlreadyMissing(err) {
 		return err
 	}
-	if err := addRoute(r, after); err != nil {
-		if routeAlreadyExists(err) {
-			return changeRoute(r, after)
-		}
-		return err
-	}
-	return nil
+	return addRoute(r, after)
 }
 
 func cleanupRouteCandidates(state *State) []Route {
