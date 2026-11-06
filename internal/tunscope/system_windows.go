@@ -79,14 +79,17 @@ func readWindowsPhysicalNetwork(r commandRunner, requestedInterface string, incl
 	if includeIPv6 {
 		include6 = "$true"
 	}
+	// A disconnected adapter can retain a lower-metric default route. Select
+	// the first connected route that also has a usable source address.
 	script := strings.Join([]string{
 		"$ErrorActionPreference='Stop'",
 		"$wanted=" + wanted,
-		"$routes=@(Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '0.0.0.0' -and ($wanted -eq 0 -or $_.InterfaceIndex -eq $wanted) } | Sort-Object @{Expression={ [int]$_.RouteMetric + [int]$_.InterfaceMetric }})",
-		"$r=$routes | Select-Object -First 1",
-		"if ($null -eq $r) { throw 'no physical IPv4 default route found' }",
-		"$ip=Get-NetIPAddress -InterfaceIndex $r.InterfaceIndex -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -ne '0.0.0.0' -and $_.PrefixOrigin -ne 'WellKnown' -and $_.AddressState -eq 'Preferred' -and -not $_.SkipAsSource } | Select-Object -First 1",
-		"if ($null -eq $ip) { throw 'physical interface has no usable IPv4 address' }",
+		"$connected=@((Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected).InterfaceIndex)",
+		"$routes=@(Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '0.0.0.0' -and $connected -contains $_.InterfaceIndex -and ($wanted -eq 0 -or $_.InterfaceIndex -eq $wanted) } | Sort-Object @{Expression={ [int]$_.RouteMetric + [int]$_.InterfaceMetric }})",
+		"$addresses=@(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '0.0.0.0' -and $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' -and $_.AddressState -eq 'Preferred' -and -not $_.SkipAsSource })",
+		"$r=$null; $ip=$null",
+		"foreach ($candidate in $routes) { $ip=$addresses | Where-Object { $_.InterfaceIndex -eq $candidate.InterfaceIndex } | Select-Object -First 1; if ($null -ne $ip) { $r=$candidate; break } }",
+		"if ($null -eq $r) { throw 'no connected physical IPv4 default route with a usable source address found' }",
 		"$dns=@((Get-DnsClientServerAddress -InterfaceIndex $r.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)",
 		"$r6=$null; $ip6=$null",
 		"if (" + include6 + ") { $r6=Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv6 -DestinationPrefix '::/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -ne '::' -and ($wanted -eq 0 -or $_.InterfaceIndex -eq $wanted) } | Sort-Object @{Expression={ [int]$_.RouteMetric + [int]$_.InterfaceMetric }} | Select-Object -First 1; if ($null -ne $r6) { $ip6=Get-NetIPAddress -InterfaceIndex $r6.InterfaceIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike 'fe80:*' -and $_.IPAddress -ne '::1' -and $_.AddressState -eq 'Preferred' -and -not $_.SkipAsSource } | Select-Object -First 1; $dns += @((Get-DnsClientServerAddress -InterfaceIndex $r6.InterfaceIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue).ServerAddresses) } }",
