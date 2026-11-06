@@ -114,7 +114,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             rid: osx-arm64
             arch: arm64
             package_arch: arm64
